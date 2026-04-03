@@ -38,7 +38,7 @@
 		"build": "tsc && node -e \"const fs=require('fs');const f='dist/cli.js';const c=fs.readFileSync(f,'utf8');if(!c.startsWith('#!')){fs.writeFileSync(f,'#!/usr/bin/env node\\n'+c)}\"",
 		"test": "mocha --timeout 5000 --import=tsx --require ./test/setup.ts 'test/**/*.test.ts' --exit",
 		"lint": "eslint --ext .ts --max-warnings 0 src/ test/",
-		"typecheck": "tsc -p tsconfig.test.json --noEmit"
+		"typecheck": "tsc --noEmit"
 	},
 	"engines": {
 		"node": ">=22"

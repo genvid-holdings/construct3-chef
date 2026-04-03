@@ -79,8 +79,12 @@ jobs:
 workflows:
   build-test-publish:
     jobs:
-      - build-and-test
+      - build-and-test:
+          context:
+            - burbank-onepassword
       - publish:
+          context:
+            - burbank-onepassword
           requires:
             - build-and-test
           filters:

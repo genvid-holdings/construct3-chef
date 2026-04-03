@@ -3,8 +3,25 @@ version: 2.1
 orbs:
   azure-cli: circleci/azure-cli@1.2.2
   node: circleci/node@6.3.0
+  onepassword: onepassword/secrets@1.0.0
 
 commands:
+  onepassword-setup:
+    description: Install 1Password CLI and setup environment
+    parameters:
+      onepassword-env:
+        type: string
+        default: "/tmp/op.env"
+    steps:
+      - onepassword/install-cli:
+          shell: /bin/bash -eo pipefail
+          version: 2.29.0
+      - run:
+          name: Setup Environment Variables
+          shell: /bin/bash -eo pipefail
+          command:
+            op read "op://${BURBANK_ENV_FILE}" -o << parameters.onepassword-env >>
+
   az-login-with-sp:
     description: Login to Azure with service principal
     steps:
@@ -29,7 +46,9 @@ jobs:
   build-and-test:
     docker:
       - image: cimg/node:22.13
+    shell: op run --env-file="/tmp/op.env" -- /bin/bash -eo pipefail
     steps:
+      - onepassword-setup
       - checkout
       - azure-cli/install
       - download-deps
@@ -59,7 +78,9 @@ jobs:
   publish:
     docker:
       - image: cimg/node:22.13
+    shell: op run --env-file="/tmp/op.env" -- /bin/bash -eo pipefail
     steps:
+      - onepassword-setup
       - checkout
       - attach_workspace:
           at: .

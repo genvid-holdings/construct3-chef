@@ -12,11 +12,14 @@ import {
   type AddNonworldInstanceOp,
   type PatchScriptOp,
   type RenameSymbolOp,
+  type LayoutOp,
+  type FileOp,
   validateRecipe,
-  executeRecipe,
   executeFileOps,
   isFileCreate,
   applyReplacements,
+  createSheet,
+  extractSheetName,
 } from "./recipeInterpreter.js";
 import {
   findLayer,
@@ -33,7 +36,7 @@ import {
   type LayoutJson as MutatorLayoutJson,
 } from "./layoutMutator.js";
 import { collectAllUids, collectLayoutSids } from "./layoutScaffold.js";
-import { readRegistryFile, makeSidGen, type SidGenerator } from "./sidUtils.js";
+import { readRegistryFile, makeSidGen, freshSidGen, type SidGenerator } from "./sidUtils.js";
 import { diffScripts } from "./previewDiff.js";
 import {
   addInstVarsToObjectType,
@@ -67,6 +70,21 @@ interface LayoutJson {
 }
 
 // ─── Helper functions ───
+
+/**
+ * Max value of a numeric Set. Avoids `Math.max(...set, 0)` because spreading
+ * a large Set onto the argument list hits V8's argument-count limit (~100k+)
+ * with `RangeError: Maximum call stack size exceeded`. For typical C3 projects
+ * the Set is small, but `validate-recipe` runs on this path too and shouldn't
+ * inherit a scaling cliff. Returns 0 when the Set is empty.
+ */
+function maxFromSet(set: Set<number>): number {
+  let max = 0;
+  for (const v of set) {
+    if (v > max) max = v;
+  }
+  return max;
+}
 
 export function loadSheet(rootDir: string, filePath: string): EventSheet {
   const fullPath = path.join(rootDir, filePath);
@@ -109,9 +127,21 @@ export function createObjectType(
   const relPath = getObjectTypePath(objectType);
   const fullPath = path.join(rootDir, relPath);
 
+  // Respect the SKIP-if-exists fast path before validating the plugin so a
+  // recipe that re-declares an already-existing objectType (a benign no-op)
+  // stays a no-op even if the recipe carries a stale or typoed plugin name.
+  // For new objectTypes we still reject unknown plugins up-front — otherwise
+  // updateInstanceTypes would silently write `class X extends undefined`.
   if (existsSync(fullPath)) {
     log(`  SKIP ${relPath} (already exists)`);
     return false;
+  }
+
+  if (!(objectType.plugin in PLUGIN_BASE_CLASS)) {
+    throw new Error(
+      `createObjectType: unknown plugin "${objectType.plugin}" for objectType "${objectType.name}". ` +
+        `Valid plugins: ${Object.keys(PLUGIN_BASE_CLASS).join(", ")}.`,
+    );
   }
 
   const ivars = (objectType.instanceVariables ?? []).map((v) => ({
@@ -217,9 +247,32 @@ export function processAddInstVars(
   entries: AddInstVarsEntry[],
   dryRun: boolean,
   log: Logger = console.log,
+  pendingObjectTypes?: ObjectTypeCreate[],
 ): void {
+  const pending = new Map<string, ObjectTypeCreate>();
+  for (const ot of pendingObjectTypes ?? []) pending.set(ot.name, ot);
+
   for (const entry of entries) {
     const newVars: InstVarDef[] = entry.instanceVariables;
+
+    // In dry-run, a type being created earlier in the same recipe won't be on
+    // disk yet (createObjectType's write is suppressed). Without this branch,
+    // validate-recipe would spuriously throw `objectType "X" not found` for a
+    // recipe that apply-recipe would accept. The createObjectType pass already
+    // logged the would-be create, so we just merge addInstVars into the
+    // pending entry's variable list (no layout instances exist for a
+    // brand-new type, and updateInstanceTypes will declare the class).
+    if (dryRun && pending.has(entry.type)) {
+      const ot = pending.get(entry.type)!;
+      const existing = new Set((ot.instanceVariables ?? []).map((v) => v.name));
+      const added = newVars.filter((v) => !existing.has(v.name)).map((v) => v.name);
+      if (added.length === 0) {
+        log(`  SKIP pending objectType "${entry.type}" (all instVars already declared)`);
+      } else {
+        log(`  UPDATE pending objectType "${entry.type}" (+${added.join(", ")})`);
+      }
+      continue;
+    }
 
     // 1. Update objectType JSON
     const objectTypeFile = findObjectTypeFile(rootDir, entry.type);
@@ -409,6 +462,283 @@ function checkMoveVariableDemotions(
   log(`move-variable: demotion safety check passed for ${demotions.map((d) => `"${d.varName}"`).join(", ")}`);
 }
 
+// ─── SID location lookup (apply-time hinting) ───
+
+type SidSlot = "event" | "condition" | "action" | "function-parameter";
+
+/**
+ * Walks `sheet` for the given `sid` and reports where it lives. Used to enrich
+ * the "SID not found in event sheet" / "does not support actions" errors when
+ * the SID does actually exist on a condition, action, or function parameter —
+ * the canonical trap behind the bug "agents grab a non-event SID surfaced by
+ * read-dsl-index". `buildSidIndex` only indexes top-level events (block /
+ * function-block / group / variable / …), so the SID-resolution path can't
+ * distinguish "totally missing" from "present on a non-event slot". Returns
+ * `null` when the SID is truly absent.
+ */
+function findSidLocation(sheet: EventSheet, sid: number): SidSlot | null {
+  function walk(nodes: EventSheetEvent[]): SidSlot | null {
+    for (const ev of nodes) {
+      if ("sid" in ev && (ev as { sid?: number }).sid === sid) return "event";
+      const conditions = (ev as { conditions?: Array<{ sid?: number }> }).conditions;
+      if (Array.isArray(conditions)) {
+        for (const c of conditions) {
+          if (c && c.sid === sid) return "condition";
+        }
+      }
+      const actions = (ev as { actions?: Array<{ sid?: number }> }).actions;
+      if (Array.isArray(actions)) {
+        for (const a of actions) {
+          if (a && a.sid === sid) return "action";
+        }
+      }
+      // function-block / custom-ace-block parameter definitions carry their
+      // own SIDs (the initiative explicitly lists these as first-class
+      // targetable and a known bug source).
+      const params = (ev as { functionParameters?: Array<{ sid?: number }> }).functionParameters;
+      if (Array.isArray(params)) {
+        for (const p of params) {
+          if (p && p.sid === sid) return "function-parameter";
+        }
+      }
+      const children = (ev as { children?: EventSheetEvent[] }).children;
+      if (Array.isArray(children)) {
+        const inChild = walk(children);
+        if (inChild) return inChild;
+      }
+    }
+    return null;
+  }
+  return walk(sheet.events);
+}
+
+/**
+ * Locate `sid` in either the pre-batch `original` sheet or the post-mutation
+ * `clone`, preferring whichever finds a more specific slot. Callers don't know
+ * whether the failure is "SID never existed" vs "SID was just inserted by an
+ * earlier op" vs "SID was just removed" — checking both views catches all three.
+ */
+function findSidLocationEither(
+  original: EventSheet,
+  clone: EventSheet,
+  sid: number,
+): SidSlot | null {
+  // Try clone first — reflects in-batch insertions and most current state.
+  return findSidLocation(clone, sid) ?? findSidLocation(original, sid);
+}
+
+/** Build the human-readable "did you mean the parent block?" guidance. */
+function sidLocationHint(filePath: string, sid: number, location: SidSlot): string {
+  if (location === "event") {
+    // The op tried to do something the event kind doesn't support (e.g.
+    // insert-actions into a group). Point the user at the parent block.
+    return (
+      ` (in ${filePath}). ` +
+      `Hint: SID ${sid} exists on an event that doesn't support this op kind. ` +
+      `Recipe ops like insert-actions / replace-action / patch-action-param target a ` +
+      `block (or function-block / custom-ace-block); walk into a child block.sid.`
+    );
+  }
+  return (
+    ` (in ${filePath}). ` +
+    `Hint: SID ${sid} exists on a ${location}, not on an event. ` +
+    `Recipe \`in:\`/\`after:\`/\`before:\` targets must address an event block — ` +
+    `walk up to the enclosing block.sid (not block.conditions[].sid, block.actions[].sid, ` +
+    `or function-block.functionParameters[].sid).`
+  );
+}
+
+/**
+ * Runs `executeFileOps` against a clone of the original sheet, catching SID
+ * resolution and SID kind-mismatch errors to add a location hint when the SID
+ * actually lives on a condition / action / function-parameter — or on an event
+ * of the wrong kind. Used by both the dry-run pass and the apply pass so
+ * validate-recipe and apply-recipe surface the same diagnostics.
+ *
+ * Preserves the original error's stack/cause when wrapping (Node's
+ * `{ cause }` option).
+ */
+function executeFileOpsWithHints(
+  sidGen: SidGenerator,
+  filePath: string,
+  original: EventSheet,
+  clone: EventSheet,
+  ops: FileOp[],
+  options?: { autoAdjust?: boolean },
+): void {
+  try {
+    executeFileOps(sidGen, clone, ops, options);
+  } catch (e) {
+    if (!(e instanceof Error)) throw e;
+
+    // (1) "SID not found in event sheet" — the SID didn't resolve at all.
+    //     Common cause: the SID lives on a condition / action / function param.
+    const notFoundMatch = /^SID (\d+) not found in event sheet/.exec(e.message);
+    if (notFoundMatch) {
+      const sid = Number(notFoundMatch[1]);
+      const location = findSidLocationEither(original, clone, sid);
+      if (location && location !== "event") {
+        throw new Error(e.message + sidLocationHint(filePath, sid, location), { cause: e });
+      }
+      throw e;
+    }
+
+    // (2) "<op>: target "sid:X" (eventType: "Y") does not support …" — the
+    //     SID resolves to an event, but the wrong kind. Point the user at a
+    //     child block when the SID names a group / function-block / etc.
+    const kindMatch = /target "sid:(\d+)" \(eventType: "[^"]+"\) does not support/.exec(e.message);
+    if (kindMatch) {
+      const sid = Number(kindMatch[1]);
+      throw new Error(e.message + sidLocationHint(filePath, sid, "event"), { cause: e });
+    }
+
+    throw e;
+  }
+}
+
+// ─── Layout op dispatch ───
+
+interface LayoutOpContext {
+  rootDir: string;
+  uidCounter: { next: number };
+  sourceLayoutCache: Map<string, MutatorLayoutJson>;
+  sidGen: SidGenerator;
+  objectTypes: ObjectTypeCreate[];
+}
+
+/**
+ * Mutates `layout` by applying a single layout op. Logs the per-op `MODIFIED`
+ * line via `log`; for a dry-run validation pass, pass a no-op logger so the
+ * caller's own summary log is the only output.
+ *
+ * Throws (via the underlying layoutMutator) when the op references a missing
+ * layer, missing instance type, etc. — that's the apply-time error we want
+ * dry-run to surface.
+ */
+function applyLayoutOp(
+  layout: LayoutJson,
+  layoutPath: string,
+  op: LayoutOp,
+  ctx: LayoutOpContext,
+  log: Logger,
+): void {
+  switch (op.op) {
+    case "add-nonworld-instance": {
+      const uid = ctx.uidCounter.next;
+      applyNonworldInstance(ctx.sidGen, layout, op, ctx.uidCounter.next++, ctx.objectTypes);
+      log(`  MODIFIED ${layoutPath} (+nonworld ${op.type} uid=${uid})`);
+      break;
+    }
+
+    case "add-sublayer": {
+      const parentLayer = findLayer(layout as MutatorLayoutJson, op.parent);
+      if (!parentLayer) {
+        throw new Error(`add-sublayer: parent layer "${op.parent}" not found in ${layoutPath}`);
+      }
+      addSublayer(parentLayer, op.name, op.after ? { after: op.after } : undefined);
+      log(`  MODIFIED ${layoutPath} (+sublayer "${op.name}" under "${op.parent}")`);
+      break;
+    }
+
+    case "add-layer":
+      addLayer(layout as MutatorLayoutJson, op.name, op.after ? { after: op.after } : undefined);
+      log(`  MODIFIED ${layoutPath} (+layer "${op.name}")`);
+      break;
+
+    case "copy-instance": {
+      let sourceLayout = ctx.sourceLayoutCache.get(op.from);
+      if (!sourceLayout) {
+        const sourceFullPath = path.join(ctx.rootDir, op.from);
+        sourceLayout = JSON.parse(readFileSync(sourceFullPath, "utf-8")) as MutatorLayoutJson;
+        ctx.sourceLayoutCache.set(op.from, sourceLayout);
+      }
+      copyInstance({
+        sourceLayout,
+        targetLayout: layout as MutatorLayoutJson,
+        instanceType: op.type,
+        includeChildren: op.includeChildren ?? false,
+        targetLayer: op.targetLayer,
+        childrenLayer: op.childrenLayer,
+        uidCounter: ctx.uidCounter,
+        sidGenerator: ctx.sidGen,
+        overrides: op.overrides,
+        childOverrides: op.childOverrides,
+      });
+      log(`  MODIFIED ${layoutPath} (+copy ${op.type} from ${op.from})`);
+      break;
+    }
+
+    case "templatize":
+      templatize(layout as MutatorLayoutJson, op.type, op.templateName, op.inheritOverrides);
+      log(`  MODIFIED ${layoutPath} (templatize ${op.type} as "${op.templateName}")`);
+      break;
+
+    case "replicify":
+      replicify(layout as MutatorLayoutJson, op.type, op.sourceTemplateName, op.inheritOverrides);
+      log(`  MODIFIED ${layoutPath} (replicify ${op.type} as replica of "${op.sourceTemplateName}")`);
+      break;
+
+    case "add-replica": {
+      let sourceLayout = ctx.sourceLayoutCache.get(op.from);
+      if (!sourceLayout) {
+        const sourceFullPath = path.join(ctx.rootDir, op.from);
+        sourceLayout = JSON.parse(readFileSync(sourceFullPath, "utf-8")) as MutatorLayoutJson;
+        ctx.sourceLayoutCache.set(op.from, sourceLayout);
+      }
+      addReplica({
+        sourceLayout,
+        sourceTemplateName: op.sourceTemplateName,
+        targetLayout: layout as MutatorLayoutJson,
+        targetLayer: op.targetLayer,
+        childrenLayer: op.childrenLayer,
+        uidCounter: ctx.uidCounter,
+        sidGenerator: ctx.sidGen,
+        overrides: op.overrides,
+        childOverrides: op.childOverrides,
+        inheritOverrides: op.inheritOverrides,
+      });
+      log(`  MODIFIED ${layoutPath} (+replica "${op.sourceTemplateName}" from ${op.from})`);
+      break;
+    }
+
+    case "remove-instance":
+      removeInstance(layout as MutatorLayoutJson, op.type, op.layer);
+      log(`  MODIFIED ${layoutPath} (-instance ${op.type}${op.layer ? ` from layer ${op.layer}` : ""})`);
+      break;
+
+    case "remove-layer":
+      removeLayer(layout as MutatorLayoutJson, op.layer);
+      log(`  MODIFIED ${layoutPath} (-layer ${op.layer})`);
+      break;
+
+    case "move-instance":
+      moveInstance({
+        layout: layout as MutatorLayoutJson,
+        typeName: op.type,
+        targetLayer: op.targetLayer,
+        childrenLayer: op.childrenLayer,
+        uidCounter: ctx.uidCounter,
+        sidGenerator: ctx.sidGen,
+      });
+      log(`  MODIFIED ${layoutPath} (move ${op.type} → "${op.targetLayer}")`);
+      break;
+
+    case "rename-layer":
+      renameLayer(layout as MutatorLayoutJson, op.currentName, op.newName);
+      log(`  MODIFIED ${layoutPath} (rename layer "${op.currentName}" → "${op.newName}")`);
+      break;
+
+    default: {
+      // Exhaustiveness check: adding a new LayoutOp variant in
+      // recipeInterpreter.ts is a compile error here until this switch is
+      // updated. Without this, a new op would silently no-op through both
+      // dry-run validation and apply.
+      const exhaustive: never = op;
+      throw new Error(`applyLayoutOp: unsupported op ${(exhaustive as { op: string }).op}`);
+    }
+  }
+}
+
 export function applyRecipeInner(sidGen: SidGenerator, rootDir: string, recipe: Recipe, opts: ApplyOptions = {}) {
   const { dryRun = false, preview = false, regenerate = true, log = console.log } = opts;
   // Validate recipe structure
@@ -458,55 +788,26 @@ export function applyRecipeInner(sidGen: SidGenerator, rootDir: string, recipe: 
       log();
     }
 
-    // addInstVars dry-run output
+    // addInstVars dry-run output. Pass recipe.objectTypes so entries targeting
+    // a type being CREATED in this recipe (not yet on disk in dry-run) are
+    // recognized as pending instead of "objectType not found".
     if (recipe.addInstVars && recipe.addInstVars.length > 0) {
       log("addInstVars:");
-      processAddInstVars(sidGen, rootDir, recipe.addInstVars, true, log);
+      processAddInstVars(sidGen, rootDir, recipe.addInstVars, true, log, recipe.objectTypes);
       log();
     }
 
-    // files dry-run output
-    if (recipe.files && Object.keys(recipe.files).length > 0) {
-      log("files:");
-      for (const [filePath, entry] of Object.entries(recipe.files)) {
-        if (isFileCreate(entry)) {
-          log(`  CREATE ${filePath} (${entry.events.length} events)`);
-        } else {
-          log(`  MODIFY ${filePath} (${entry.length} ops)`);
-          for (const op of entry) {
-            const opPath = "path" in op ? op.path : undefined;
-            const opPaths = "paths" in op ? op.paths : undefined;
-            const pathStr = opPath ?? (opPaths ? `[${opPaths.length} paths]` : "");
-            const indexStr =
-              "actionIndex" in op && (op as { actionIndex?: number }).actionIndex !== undefined
-                ? ` [actionIndex: ${(op as { actionIndex: number }).actionIndex}]`
-                : "";
-            log(`    - ${op.op}${pathStr ? ` @ ${pathStr}` : ""}${indexStr}`);
-            if (op.op === "patch-script") {
-              const patchOp = op as PatchScriptOp;
-              if (patchOp.matchScript !== undefined) {
-                log(`      matchScript: ${JSON.stringify(patchOp.matchScript)}`);
-              }
-              log(`      find:    ${JSON.stringify(patchOp.find)}`);
-              log(
-                `      replace: ${JSON.stringify(Array.isArray(patchOp.replace) ? patchOp.replace.join("\n") : patchOp.replace)}`,
-              );
-            }
-            if (op.op === "rename-symbol") {
-              const renameOp = op as RenameSymbolOp;
-              for (const r of renameOp.replacements) {
-                log(`      ${JSON.stringify(r.from)} → ${JSON.stringify(r.to)}`);
-              }
-            }
-          }
-        }
-      }
-      log();
-    }
-
-    // layouts dry-run output
+    // layouts dry-run output + in-memory validation. Match the non-dry-run
+    // section order (objectTypes → addInstVars → layouts → files) so any
+    // cross-section dependency surfaces consistently.
     if (recipe.layouts && Object.keys(recipe.layouts).length > 0) {
       log("layouts:");
+      const layoutsDir = path.join(rootDir, "layouts");
+      const allUids = collectAllUids(layoutsDir);
+      const dryRunUidCounter = { next: maxFromSet(allUids) + 1 };
+      const dryRunSourceCache = new Map<string, MutatorLayoutJson>();
+      const noopLog: Logger = () => {};
+
       for (const [filePath, ops] of Object.entries(recipe.layouts)) {
         log(`  MODIFY ${filePath} (${ops.length} ops)`);
         for (const op of ops) {
@@ -544,32 +845,130 @@ export function applyRecipeInner(sidGen: SidGenerator, rootDir: string, recipe: 
               log(`    - ${op.op} type=${op.type} targetLayer="${op.targetLayer}"`);
               break;
             case "rename-layer":
-              log(`    - ${op.op} "${op.currentName}" \u2192 "${op.newName}"`);
+              log(`    - ${op.op} "${op.currentName}" → "${op.newName}"`);
               break;
+            default: {
+              // Matches the exhaustiveness check in applyLayoutOp so a new
+              // LayoutOp variant is a compile error here too.
+              const exhaustive: never = op;
+              throw new Error(`layouts dry-run: unsupported op ${(exhaustive as { op: string }).op}`);
+            }
           }
         }
+
+        // Validate by running each op against a clone. Errors thrown by
+        // layoutMutator (missing layer, missing instance type, etc.) now
+        // surface in dry-run instead of only at apply.
+        const fullPath = path.join(rootDir, filePath);
+        const original = JSON.parse(readFileSync(fullPath, "utf-8")) as LayoutJson;
+        const clone = JSON.parse(JSON.stringify(original)) as LayoutJson;
+        // Validation pass uses a per-layout fresh SID generator seeded with
+        // the layout's existing SIDs — keeps the dry-run mutations isolated
+        // from the recipe-wide sidGen.
+        const dryRunCtx: LayoutOpContext = {
+          rootDir,
+          uidCounter: dryRunUidCounter,
+          sourceLayoutCache: dryRunSourceCache,
+          sidGen: makeSidGen(collectLayoutSids(clone as Record<string, unknown>)),
+          objectTypes: recipe.objectTypes ?? [],
+        };
+        for (const op of ops) {
+          applyLayoutOp(clone, filePath, op, dryRunCtx, noopLog);
+        }
+
+        // Cross-layout consistency: a later layout's `copy-instance` /
+        // `add-replica` with `from: filePath` should see the mutated clone,
+        // matching apply behavior where each layout is written to disk before
+        // the next iterates (and reads the modified version via cache miss).
+        // Without this, a recipe `{ layouts: { A: [add X], B: [copy X from A] } }`
+        // throws spuriously at dry-run while apply succeeds.
+        dryRunSourceCache.set(filePath, clone as MutatorLayoutJson);
       }
       log();
     }
 
-    if (preview && recipe.files) {
-      log("--- Preview (script diffs) ---\n");
+    // files dry-run output + in-memory validation. Errors thrown by
+    // executeFileOps (SID-kind mismatches, missing nodes, etc.) and by
+    // createSheet (malformed file-create events) now surface during
+    // validate-recipe instead of only at apply.
+    if (recipe.files && Object.keys(recipe.files).length > 0) {
+      log("files:");
+      // Ordered preview entries: preserves recipe.files insertion order so
+      // creates and modifies interleave the same way the user wrote them.
+      type PreviewEntry =
+        | { filePath: string; kind: "create"; eventCount: number }
+        | { filePath: string; kind: "diff"; diffs: string[] };
+      const previewEntries: PreviewEntry[] = [];
+
       for (const [filePath, entry] of Object.entries(recipe.files)) {
         if (isFileCreate(entry)) {
-          log(`  CREATE ${filePath} — new file with ${entry.events.length} event(s)`);
-          continue;
-        }
-        const original = loadSheet(rootDir, filePath);
-        const clone = JSON.parse(JSON.stringify(original)) as EventSheet;
-        executeFileOps(sidGen, clone, entry);
-
-        const diffs = diffScripts(filePath, original, clone);
-        if (diffs.length === 0) {
-          log(`  ${filePath} — no script changes`);
+          log(`  CREATE ${filePath} (${entry.events.length} events)`);
+          // Validate the create by building the sheet directly — createSheet
+          // is the only thing executeRecipe would have called for a FileCreate
+          // entry, so calling it here avoids the throwing-loader contract trap.
+          createSheet(sidGen, extractSheetName(filePath), entry.events);
+          if (preview) previewEntries.push({ filePath, kind: "create", eventCount: entry.events.length });
         } else {
-          log(`  ${filePath}:`);
-          for (const d of diffs) {
-            log(d);
+          log(`  MODIFY ${filePath} (${entry.length} ops)`);
+          for (const op of entry) {
+            const opPath = "path" in op ? op.path : undefined;
+            const opPaths = "paths" in op ? op.paths : undefined;
+            const pathStr = opPath ?? (opPaths ? `[${opPaths.length} paths]` : "");
+            const indexStr =
+              "actionIndex" in op && (op as { actionIndex?: number }).actionIndex !== undefined
+                ? ` [actionIndex: ${(op as { actionIndex: number }).actionIndex}]`
+                : "";
+            log(`    - ${op.op}${pathStr ? ` @ ${pathStr}` : ""}${indexStr}`);
+            if (op.op === "patch-script") {
+              const patchOp = op as PatchScriptOp;
+              if (patchOp.matchScript !== undefined) {
+                log(`      matchScript: ${JSON.stringify(patchOp.matchScript)}`);
+              }
+              log(`      find:    ${JSON.stringify(patchOp.find)}`);
+              log(
+                `      replace: ${JSON.stringify(Array.isArray(patchOp.replace) ? patchOp.replace.join("\n") : patchOp.replace)}`,
+              );
+            }
+            if (op.op === "rename-symbol") {
+              const renameOp = op as RenameSymbolOp;
+              for (const r of renameOp.replacements) {
+                log(`      ${JSON.stringify(r.from)} → ${JSON.stringify(r.to)}`);
+              }
+            }
+          }
+
+          // Validate by load → clone → executeFileOps. SID-kind mismatches
+          // and other apply-time errors throw here; the wrapper enriches
+          // "SID not found" / "does not support …" errors with a hint when the
+          // SID lives on a condition / action / function-param or on the wrong
+          // event kind. Defensive clone of `entry` keeps executeFileOps's
+          // internal remove-event normalization from mutating the caller's
+          // Recipe object.
+          const original = loadSheet(rootDir, filePath);
+          const clone = JSON.parse(JSON.stringify(original)) as EventSheet;
+          const opsClone = JSON.parse(JSON.stringify(entry)) as FileOp[];
+          executeFileOpsWithHints(sidGen, filePath, original, clone, opsClone, {
+            autoAdjust: recipe.autoAdjust,
+          });
+          if (preview) {
+            previewEntries.push({ filePath, kind: "diff", diffs: diffScripts(filePath, original, clone) });
+          }
+        }
+      }
+      log();
+
+      if (preview && previewEntries.length > 0) {
+        log("--- Preview (script diffs) ---\n");
+        for (const entry of previewEntries) {
+          if (entry.kind === "create") {
+            log(`  CREATE ${entry.filePath} — new file with ${entry.eventCount} event(s)`);
+          } else if (entry.diffs.length === 0) {
+            log(`  ${entry.filePath} — no script changes`);
+          } else {
+            log(`  ${entry.filePath}:`);
+            for (const d of entry.diffs) {
+              log(d);
+            }
           }
         }
       }
@@ -594,7 +993,10 @@ export function applyRecipeInner(sidGen: SidGenerator, rootDir: string, recipe: 
   // ─── Step 1b: Process addInstVars ───
   if (recipe.addInstVars && recipe.addInstVars.length > 0) {
     log("\naddInstVars:");
-    processAddInstVars(sidGen, rootDir, recipe.addInstVars, false, log);
+    // In apply mode the objectType files have already been written by Step 1,
+    // so passing pendingObjectTypes is harmless (findObjectTypeFile will find
+    // them on disk). Still passed for symmetry with the dry-run call.
+    processAddInstVars(sidGen, rootDir, recipe.addInstVars, false, log, recipe.objectTypes);
   }
 
   // ─── Step 2: Process layouts ───
@@ -602,120 +1004,28 @@ export function applyRecipeInner(sidGen: SidGenerator, rootDir: string, recipe: 
     log("\nlayouts:");
     const layoutsDir = path.join(rootDir, "layouts");
     const allUids = collectAllUids(layoutsDir);
-    const uidCounter = { next: Math.max(...allUids, 0) + 1 };
+    const uidCounter = { next: maxFromSet(allUids) + 1 };
     const sourceLayoutCache = new Map<string, MutatorLayoutJson>();
 
     for (const [layoutPath, ops] of Object.entries(recipe.layouts)) {
       const fullPath = path.join(rootDir, layoutPath);
       const layout = JSON.parse(readFileSync(fullPath, "utf-8")) as LayoutJson;
+      const ctx: LayoutOpContext = {
+        rootDir,
+        uidCounter,
+        sourceLayoutCache,
+        sidGen,
+        objectTypes: recipe.objectTypes ?? [],
+      };
 
       for (const op of ops) {
-        switch (op.op) {
-          case "add-nonworld-instance":
-            applyNonworldInstance(sidGen, layout, op, uidCounter.next++, recipe.objectTypes ?? []);
-            log(`  MODIFIED ${layoutPath} (+nonworld ${op.type} uid=${uidCounter.next - 1})`);
-            break;
-
-          case "add-sublayer": {
-            const parentLayer = findLayer(layout as MutatorLayoutJson, op.parent);
-            if (!parentLayer) {
-              throw new Error(`add-sublayer: parent layer "${op.parent}" not found in ${layoutPath}`);
-            }
-            addSublayer(parentLayer, op.name, op.after ? { after: op.after } : undefined);
-            log(`  MODIFIED ${layoutPath} (+sublayer "${op.name}" under "${op.parent}")`);
-            break;
-          }
-
-          case "add-layer":
-            addLayer(layout as MutatorLayoutJson, op.name, op.after ? { after: op.after } : undefined);
-            log(`  MODIFIED ${layoutPath} (+layer "${op.name}")`);
-            break;
-
-          case "copy-instance": {
-            let sourceLayout = sourceLayoutCache.get(op.from);
-            if (!sourceLayout) {
-              const sourceFullPath = path.join(rootDir, op.from);
-              sourceLayout = JSON.parse(readFileSync(sourceFullPath, "utf-8")) as MutatorLayoutJson;
-              sourceLayoutCache.set(op.from, sourceLayout);
-            }
-            copyInstance({
-              sourceLayout,
-              targetLayout: layout as MutatorLayoutJson,
-              instanceType: op.type,
-              includeChildren: op.includeChildren ?? false,
-              targetLayer: op.targetLayer,
-              childrenLayer: op.childrenLayer,
-              uidCounter,
-              sidGenerator: sidGen,
-              overrides: op.overrides,
-              childOverrides: op.childOverrides,
-            });
-            log(`  MODIFIED ${layoutPath} (+copy ${op.type} from ${op.from})`);
-            break;
-          }
-
-          case "templatize":
-            templatize(layout as MutatorLayoutJson, op.type, op.templateName, op.inheritOverrides);
-            log(`  MODIFIED ${layoutPath} (templatize ${op.type} as "${op.templateName}")`);
-            break;
-
-          case "replicify":
-            replicify(layout as MutatorLayoutJson, op.type, op.sourceTemplateName, op.inheritOverrides);
-            log(`  MODIFIED ${layoutPath} (replicify ${op.type} as replica of "${op.sourceTemplateName}")`);
-            break;
-
-          case "add-replica": {
-            let sourceLayout = sourceLayoutCache.get(op.from);
-            if (!sourceLayout) {
-              const sourceFullPath = path.join(rootDir, op.from);
-              sourceLayout = JSON.parse(readFileSync(sourceFullPath, "utf-8")) as MutatorLayoutJson;
-              sourceLayoutCache.set(op.from, sourceLayout);
-            }
-            addReplica({
-              sourceLayout,
-              sourceTemplateName: op.sourceTemplateName,
-              targetLayout: layout as MutatorLayoutJson,
-              targetLayer: op.targetLayer,
-              childrenLayer: op.childrenLayer,
-              uidCounter,
-              sidGenerator: sidGen,
-              overrides: op.overrides,
-              childOverrides: op.childOverrides,
-              inheritOverrides: op.inheritOverrides,
-            });
-            log(`  MODIFIED ${layoutPath} (+replica "${op.sourceTemplateName}" from ${op.from})`);
-            break;
-          }
-
-          case "remove-instance":
-            removeInstance(layout as MutatorLayoutJson, op.type, op.layer);
-            log(`  MODIFIED ${layoutPath} (-instance ${op.type}${op.layer ? ` from layer ${op.layer}` : ""})`);
-            break;
-
-          case "remove-layer":
-            removeLayer(layout as MutatorLayoutJson, op.layer);
-            log(`  MODIFIED ${layoutPath} (-layer ${op.layer})`);
-            break;
-
-          case "move-instance":
-            moveInstance({
-              layout: layout as MutatorLayoutJson,
-              typeName: op.type,
-              targetLayer: op.targetLayer,
-              childrenLayer: op.childrenLayer,
-              uidCounter,
-              sidGenerator: sidGen,
-            });
-            log(`  MODIFIED ${layoutPath} (move ${op.type} \u2192 "${op.targetLayer}")`);
-            break;
-
-          case "rename-layer":
-            renameLayer(layout as MutatorLayoutJson, op.currentName, op.newName);
-            log(`  MODIFIED ${layoutPath} (rename layer "${op.currentName}" \u2192 "${op.newName}")`);
-            break;
-        }
+        applyLayoutOp(layout, layoutPath, op, ctx, log);
       }
 
+      // Defense in depth: the dry-run branch early-returns above, so dryRun is
+      // false here today — but the explicit guard means a future code path
+      // that reaches the loop without an early return can't accidentally
+      // overwrite the project.
       if (!dryRun) {
         writeFileSync(fullPath, JSON.stringify(layout, null, "\t") + "\n");
       }
@@ -723,21 +1033,30 @@ export function applyRecipeInner(sidGen: SidGenerator, rootDir: string, recipe: 
   }
 
   // ─── Step 3: Process files ───
+  // We do the load → clone → executeFileOps loop ourselves (instead of calling
+  // executeRecipe) so the same `executeFileOpsWithHints` wrapper covers both
+  // apply and dry-run paths — that gives the SID kind / function-parameter
+  // hints to operators running `apply-recipe` directly without a prior
+  // `validate-recipe`.
   if (recipe.files && Object.keys(recipe.files).length > 0) {
     log("\nfiles:");
-    const result = executeRecipe(sidGen, { files: recipe.files }, (filePath) => loadSheet(rootDir, filePath));
-
-    for (const [filePath, sheet] of result.modified) {
+    for (const [filePath, entry] of Object.entries(recipe.files)) {
       const fullPath = path.join(rootDir, filePath);
-      writeFileSync(fullPath, JSON.stringify(sheet, null, "\t") + "\n");
-      log(`  MODIFIED ${filePath}`);
-    }
-
-    for (const [filePath, sheet] of result.created) {
-      const fullPath = path.join(rootDir, filePath);
-      mkdirSync(path.dirname(fullPath), { recursive: true });
-      writeFileSync(fullPath, JSON.stringify(sheet, null, "\t") + "\n");
-      log(`  CREATED ${filePath}`);
+      if (isFileCreate(entry)) {
+        const sheet = createSheet(sidGen, extractSheetName(filePath), entry.events);
+        mkdirSync(path.dirname(fullPath), { recursive: true });
+        writeFileSync(fullPath, JSON.stringify(sheet, null, "\t") + "\n");
+        log(`  CREATED ${filePath}`);
+      } else {
+        const original = loadSheet(rootDir, filePath);
+        const clone = JSON.parse(JSON.stringify(original)) as EventSheet;
+        const opsClone = JSON.parse(JSON.stringify(entry)) as FileOp[];
+        executeFileOpsWithHints(sidGen, filePath, original, clone, opsClone, {
+          autoAdjust: recipe.autoAdjust,
+        });
+        writeFileSync(fullPath, JSON.stringify(clone, null, "\t") + "\n");
+        log(`  MODIFIED ${filePath}`);
+      }
     }
   }
 

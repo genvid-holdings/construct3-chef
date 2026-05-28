@@ -1875,7 +1875,7 @@ export function executeRecipe(
   return { modified, created };
 }
 
-function extractSheetName(filePath: string): string {
+export function extractSheetName(filePath: string): string {
   const basename = filePath.split("/").pop() ?? filePath;
   return basename.replace(/\.json$/, "");
 }

@@ -446,6 +446,32 @@ Wraps a set of existing events into a new group. Events are addressed by SID and
 
 Non-contiguous events are supported. The group is inserted at the position where the first event was.
 
+### move-variable
+
+Moves a variable between **global** and **local** scope within one event sheet. Scope is positional: a `variable` event at the sheet root is global (referenced in scripts as `runtime.globalVars.X`); nested inside a group/block it is local (`localVars.X`).
+
+```json
+{ "op": "move-variable", "variable": "sid:100234567890123", "to": "root" }            // promote → global
+{ "op": "move-variable", "variable": "sid:100234567890123", "to": "sid:100234567890456" } // demote → local, into that container
+```
+
+| Field | Required | Description |
+| ----- | -------- | ----------- |
+| `variable` | yes | SID ref (`"sid:X"` or `"$symbol"`) of the variable to move |
+| `to` | yes | Destination: `"root"` (global) or a container SID ref (local) |
+| `index` | no | Position within the destination's children (default: `0` — top) |
+| `id` | no | `$symbol` name to register for the moved variable |
+
+Behavior:
+
+- **SID is preserved** across the move.
+- **Script references are rewritten** within the variable's scope subtree: `localVars.X` ⇄ `runtime.globalVars.X`. C3 expression parameters reference variables by bare name regardless of scope, so they are left unchanged.
+- **`isStatic` is normalized to `true`** in both directions. Globals are effectively always static; a demoted global must stay static to keep its persist-across-ticks semantics.
+- **Demotion is refused** when the global is referenced in *other* event sheets — a project-wide global cannot be confined to one local scope. The check is conservative (whole-word name match across other sheets' JSON) and reports the offending sheets. To proceed, replace the external usages (e.g. via shared getter/setter functions) or relocate the global first.
+- Only the two canonical directions are supported (root ⇄ nested). Re-parenting between two local scopes is not.
+
+> **Scope ordering caveat:** a local variable must be declared *before* the events that read it to be in scope (group-level, sibling before the block). The default `index: 0` places it first; override `index` only if you know the destination's ordering.
+
 ---
 
 ## Layout Operations

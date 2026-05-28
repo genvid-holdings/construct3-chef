@@ -595,14 +595,16 @@ export function buildCommentAction(text: string): CommentAction {
 // --- Script walker ---
 
 /**
- * Walk all script actions in an eventSheet, returning mutable references.
- * Traverses blocks, function-blocks, custom-ace-blocks, and groups recursively.
+ * Walk all script actions in an array of events (and their descendants),
+ * returning mutable references. Traverses blocks, function-blocks,
+ * custom-ace-blocks, and groups recursively. Use this to scope a script
+ * rewrite to a single container's subtree.
  */
-export function walkScriptActions(sheet: EventSheet): ScriptAction[] {
+export function walkScriptActionsInArray(events: EventSheetEvent[]): ScriptAction[] {
   const results: ScriptAction[] = [];
 
-  function traverse(events: EventSheetEvent[]): void {
-    for (const event of events) {
+  function traverse(nodes: EventSheetEvent[]): void {
+    for (const event of nodes) {
       if (
         event.eventType === "variable" ||
         event.eventType === "comment" ||
@@ -629,8 +631,16 @@ export function walkScriptActions(sheet: EventSheet): ScriptAction[] {
     }
   }
 
-  traverse(sheet.events);
+  traverse(events);
   return results;
+}
+
+/**
+ * Walk all script actions in an eventSheet, returning mutable references.
+ * Traverses blocks, function-blocks, custom-ace-blocks, and groups recursively.
+ */
+export function walkScriptActions(sheet: EventSheet): ScriptAction[] {
+  return walkScriptActionsInArray(sheet.events);
 }
 
 function isScriptAction(action: ScriptAction | Record<string, unknown>): action is ScriptAction {

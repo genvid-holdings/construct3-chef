@@ -3,7 +3,7 @@ import path from "node:path";
 import { extractScripts, generateDSL, generateLayoutSummaries } from "./generators.js";
 import type { Logger } from "genvid-mcp-utils";
 import type { ApplyOptions } from "./types.js";
-import type { EventSheet } from "c3source";
+import type { EventSheet, EventSheetEvent } from "c3source";
 import { find_all_eventsheets_path, find_all_objectTypes_path, find_all_layouts_path } from "c3source";
 import {
   type Recipe,
@@ -337,6 +337,79 @@ export function applyNonworldInstance(
 
 // ─── Main apply function ───
 
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Resolve a `"sid:X"` variable ref to its name in the given sheet, or null. */
+function findVariableNameBySidRef(sheet: EventSheet, ref: string): string | null {
+  const sid = Number(ref.slice("sid:".length));
+  if (!Number.isFinite(sid)) return null;
+  let found: string | null = null;
+  function walk(nodes: EventSheetEvent[]): void {
+    for (const ev of nodes) {
+      if (found) return;
+      if (ev.eventType === "variable" && ev.sid === sid) {
+        found = ev.name;
+        return;
+      }
+      const children = (ev as { children?: EventSheetEvent[] }).children;
+      if (Array.isArray(children)) walk(children);
+    }
+  }
+  walk(sheet.events);
+  return found;
+}
+
+/**
+ * Refuse a global → local demotion when the variable is referenced from other
+ * event sheets — a project-wide global cannot be confined to a single local
+ * scope. The check is conservative: it matches the variable name as a whole
+ * word in each other sheet's raw JSON (covering both `runtime.globalVars.NAME`
+ * script refs and bare-name C3 expression params), so it may over-refuse on a
+ * coincidental match; resolve by replacing the external usages or relocating
+ * the global first. `$symbol` refs are skipped (they name an in-recipe variable
+ * that cannot have pre-existing external references).
+ */
+function checkMoveVariableDemotions(
+  rootDir: string,
+  files: NonNullable<Recipe["files"]>,
+  log: Logger,
+): void {
+  const demotions: Array<{ filePath: string; varName: string }> = [];
+  for (const [filePath, entry] of Object.entries(files)) {
+    if (isFileCreate(entry)) continue;
+    for (const op of entry) {
+      if (op.op !== "move-variable" || op.to === "root") continue;
+      if (!op.variable.startsWith("sid:")) continue;
+      const varName = findVariableNameBySidRef(loadSheet(rootDir, filePath), op.variable);
+      if (varName !== null) demotions.push({ filePath, varName });
+    }
+  }
+  if (demotions.length === 0) return;
+
+  const allFiles = find_all_eventsheets_path(path.join(rootDir, "eventSheets"));
+  for (const { filePath, varName } of demotions) {
+    const targetResolved = path.resolve(rootDir, filePath);
+    const wordRe = new RegExp(`\\b${escapeRegExp(varName)}\\b`);
+    const offending: string[] = [];
+    for (const fullPath of allFiles) {
+      if (path.resolve(fullPath) === targetResolved) continue;
+      if (wordRe.test(readFileSync(fullPath, "utf-8"))) {
+        offending.push(path.relative(rootDir, fullPath));
+      }
+    }
+    if (offending.length > 0) {
+      throw new Error(
+        `move-variable: cannot demote global variable "${varName}" to local — it is referenced in ` +
+          `${offending.length} other event sheet(s): ${offending.join(", ")}. ` +
+          `Replace those usages (e.g. via shared getter/setter functions) or relocate the global first.`,
+      );
+    }
+  }
+  log(`move-variable: demotion safety check passed for ${demotions.map((d) => `"${d.varName}"`).join(", ")}`);
+}
+
 export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOptions = {}) {
   const { dryRun = false, preview = false, regenerate = true, log = console.log } = opts;
   // Validate recipe structure
@@ -364,6 +437,13 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
   if (layoutFileCount > 0) summaryParts.push(`${layoutFileCount} layout file(s)`);
   summaryParts.push(`${totalOpCount} operation(s)`);
   log(`Recipe: ${summaryParts.join(", ")}`);
+
+  // Safety: a move-variable global → local demotion is only valid when the
+  // global is not referenced from other event sheets. Check before any dry-run
+  // output or write so validate-recipe surfaces it too.
+  if (recipe.files && Object.keys(recipe.files).length > 0) {
+    checkMoveVariableDemotions(rootDir, recipe.files, log);
+  }
 
   if (dryRun) {
     log("\n--- Dry run (no files written) ---\n");

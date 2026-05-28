@@ -3,6 +3,7 @@ import { assert } from "chai";
 import type {
   EventSheet,
   EventSheetEvent,
+  EventSheetVariable,
   BlockEvent,
   FunctionBlockEvent,
   CustomAceBlockEvent,
@@ -3660,5 +3661,198 @@ describe("executeOp: wrap-in-group", () => {
     assert.equal(group.children!.length, 1); // deduplicated to 1
     assert.equal(group.children![0].sid, 10);
     assert.equal(sheet.events.length, 2); // group + b2
+  });
+
+  it("R2.13: wrap-in-group is registered in VALID_OPS", () => {
+    // Regression: wrap-in-group shipped (S18) but was absent from VALID_OPS,
+    // so validateRecipe rejected it as an unknown op.
+    assert.isTrue(VALID_OPS.has("wrap-in-group"));
+  });
+});
+
+function makeVariable(overrides?: Partial<EventSheetVariable>): EventSheetVariable {
+  return {
+    eventType: "variable",
+    name: "myVar",
+    type: "number",
+    initialValue: "0",
+    isStatic: false,
+    isConstant: false,
+    sid: 100,
+    ...overrides,
+  };
+}
+
+function makeGroup(overrides?: Partial<GroupEvent>): GroupEvent {
+  return {
+    eventType: "group",
+    disabled: false,
+    title: "G",
+    description: "",
+    isActiveOnStart: true,
+    children: [],
+    sid: 5,
+    ...overrides,
+  };
+}
+
+describe("executeOp: move-variable", () => {
+  it("MV1: promotes a local variable to the sheet root", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const group = makeGroup({ sid: 5, children: [v, makeBlock({ sid: 20 })] });
+    const sheet = makeSheet(group);
+    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
+    assert.equal(sheet.events.length, 2); // variable + group
+    assert.equal(sheet.events[0].sid, 100);
+    assert.equal((sheet.events[0] as EventSheetVariable).name, "score");
+    assert.equal(group.children!.length, 1); // only the block remains
+    assert.equal(group.children![0].sid, 20);
+  });
+
+  it("MV2: promotion rewrites localVars.X → runtime.globalVars.X in the source scope", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const script = buildScriptAction({ script: ["localVars.score = localVars.score + 1;"] });
+    const block = makeBlock({ sid: 20, actions: [script] });
+    const group = makeGroup({ sid: 5, children: [v, block] });
+    const sheet = makeSheet(group);
+    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
+    assert.deepEqual(script.script, ["runtime.globalVars.score = runtime.globalVars.score + 1;"]);
+  });
+
+  it("MV3: promotion is word-boundary aware (does not touch localVars.scoreMultiplier)", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const script = buildScriptAction({ script: ["localVars.score = localVars.scoreMultiplier;"] });
+    const block = makeBlock({ sid: 20, actions: [script] });
+    const group = makeGroup({ sid: 5, children: [v, block] });
+    const sheet = makeSheet(group);
+    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
+    assert.deepEqual(script.script, ["runtime.globalVars.score = localVars.scoreMultiplier;"]);
+  });
+
+  it("MV4: promotion normalizes isStatic to true", () => {
+    const v = makeVariable({ sid: 100, name: "score", isStatic: false });
+    const group = makeGroup({ sid: 5, children: [v] });
+    const sheet = makeSheet(group);
+    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
+    assert.isTrue((sheet.events[0] as EventSheetVariable).isStatic);
+  });
+
+  it("MV5: demotes a global variable into a container", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const block = makeBlock({ sid: 20 });
+    const group = makeGroup({ sid: 5, children: [block] });
+    const sheet = makeSheet(v, group);
+    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]);
+    assert.equal(sheet.events.length, 1); // only the group remains at root
+    assert.equal(group.children!.length, 2);
+    assert.equal(group.children![0].sid, 100); // variable inserted at index 0
+    assert.equal(group.children![1].sid, 20);
+  });
+
+  it("MV6: demotion rewrites runtime.globalVars.X → localVars.X in the destination scope", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const script = buildScriptAction({ script: ["runtime.globalVars.score += 1;"] });
+    const block = makeBlock({ sid: 20, actions: [script] });
+    const group = makeGroup({ sid: 5, children: [block] });
+    const sheet = makeSheet(v, group);
+    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]);
+    assert.deepEqual(script.script, ["localVars.score += 1;"]);
+  });
+
+  it("MV7: demotion sets isStatic to true", () => {
+    const v = makeVariable({ sid: 100, name: "score", isStatic: false });
+    const group = makeGroup({ sid: 5, children: [makeBlock({ sid: 20 })] });
+    const sheet = makeSheet(v, group);
+    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]);
+    assert.isTrue((group.children![0] as EventSheetVariable).isStatic);
+  });
+
+  it("MV8: preserves the variable SID across the move", () => {
+    const v = makeVariable({ sid: 123456789, name: "score" });
+    const group = makeGroup({ sid: 5, children: [v] });
+    const sheet = makeSheet(group);
+    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:123456789", to: "root" }]);
+    assert.equal(sheet.events[0].sid, 123456789);
+  });
+
+  it("MV9: index places the demoted variable at the given position", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const group = makeGroup({ sid: 5, children: [makeBlock({ sid: 20 }), makeBlock({ sid: 30 })] });
+    const sheet = makeSheet(v, group);
+    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5", index: 1 }]);
+    assert.equal(group.children!.length, 3);
+    assert.equal(group.children![0].sid, 20);
+    assert.equal(group.children![1].sid, 100);
+    assert.equal(group.children![2].sid, 30);
+  });
+
+  it("MV10: $symbol registration enables targeting in a later op", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const group = makeGroup({ sid: 5, children: [makeBlock({ sid: 20 })] });
+    const sheet = makeSheet(v, group);
+    executeFileOps(sheet, [
+      { op: "move-variable", variable: "sid:100", to: "sid:5", id: "$v" }, // demote into group
+      { op: "move-variable", variable: "$v", to: "root" }, // promote back via symbol
+    ]);
+    assert.equal(sheet.events[0].sid, 100); // back at root
+    assert.equal(group.children!.length, 1); // only the block remains
+  });
+
+  it("MV11: throws when the ref is not a variable", () => {
+    const block = makeBlock({ sid: 10 });
+    const sheet = makeSheet(block);
+    assert.throws(
+      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:10", to: "root" }]),
+      /not a variable/,
+    );
+  });
+
+  it("MV12: throws when promoting an already-global variable", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const sheet = makeSheet(v);
+    assert.throws(
+      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]),
+      /already global/,
+    );
+  });
+
+  it("MV13: throws when demoting an already-local variable", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const group = makeGroup({ sid: 5, children: [v] });
+    const sheet = makeSheet(group);
+    assert.throws(
+      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]),
+      /already local/,
+    );
+  });
+
+  it("MV14: throws when the destination is not a container", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const other = makeVariable({ sid: 200, name: "other" });
+    const sheet = makeSheet(v, other);
+    assert.throws(
+      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:200" }]),
+      /not a container/,
+    );
+  });
+
+  it("MV15: throws on a name collision in the destination scope", () => {
+    const v = makeVariable({ sid: 100, name: "score" });
+    const dup = makeVariable({ sid: 200, name: "score" });
+    const group = makeGroup({ sid: 5, children: [dup] });
+    const sheet = makeSheet(v, group);
+    assert.throws(
+      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]),
+      /already declares a variable named "score"/,
+    );
+  });
+
+  it("MV16: registered in OP_FIELD_SCHEMAS and VALID_OPS", () => {
+    assert.isTrue(VALID_OPS.has("move-variable"));
+    const schema = OP_FIELD_SCHEMAS["move-variable"];
+    assert.ok(schema, "move-variable must be in OP_FIELD_SCHEMAS");
+    assert.deepStrictEqual(schema.required, ["variable", "to"]);
+    assert.include(schema.optional, "index");
+    assert.include(schema.optional, "id");
   });
 });

@@ -1,6 +1,7 @@
 import type {
   EventSheet,
   EventSheetEvent,
+  EventSheetVariable,
   Condition,
   ScriptAction,
   BlockEvent,
@@ -38,6 +39,7 @@ import {
   hasActions,
   hasChildren,
   walkScriptActions,
+  walkScriptActionsInArray,
   buildSidIndex,
   type SidIndex,
   type SidIndexEntry,
@@ -89,7 +91,8 @@ export type FileOp =
   | SetDisabledOp
   | RenameSymbolOp
   | PatchFunctionBlockOp
-  | WrapInGroupOp;
+  | WrapInGroupOp
+  | MoveVariableOp;
 
 export interface InsertEventOp {
   op: "insert-event";
@@ -251,6 +254,29 @@ export interface WrapInGroupOp {
   id?: string;
   activeOnStart?: boolean;
   disabled?: boolean;
+}
+
+/**
+ * Move a variable between global and local scope within one event sheet.
+ *
+ * Scope is positional: a `variable` event at the sheet root is global
+ * (`runtime.globalVars.X` in scripts); nested in a group/block it is local
+ * (`localVars.X`). `to: "root"` promotes a local to global; a `to` SID ref to
+ * a group/block demotes a global to local inside that container.
+ *
+ * On move the variable's SID is preserved, its `localVars.X` ⇄
+ * `runtime.globalVars.X` script references are rewritten within the relevant
+ * scope subtree, and (per C3 semantics — globals are effectively always static)
+ * `isStatic` is normalized to `true`. The cross-sheet safety check that refuses
+ * a demotion when the global is referenced from other sheets lives in the
+ * applier (`recipeApplier.ts`), which can see the whole project.
+ */
+export interface MoveVariableOp {
+  op: "move-variable";
+  variable: string;
+  to: string;
+  index?: number;
+  id?: string;
 }
 
 // ─── objectTypes / layouts Section Types ───
@@ -1204,6 +1230,86 @@ export function executeOp(
       break;
     }
 
+    case "move-variable": {
+      // Resolve the variable and its current location.
+      const varEntry = resolveEventRef(op.variable, _sidIndex, _symbolTable);
+      const varNode = varEntry.node;
+      if (varNode.eventType !== "variable") {
+        throw new Error(
+          `move-variable: "${op.variable}" resolves to a "${varNode.eventType}" event, not a variable`,
+        );
+      }
+      const variable = varNode as EventSheetVariable;
+      const sourceArray = varEntry.parentArray;
+      const isCurrentlyGlobal = sourceArray === sheet.events;
+
+      // Resolve the destination array. `to: "root"` = global (sheet root);
+      // any other ref = local (inside that container).
+      const toRoot = op.to === "root";
+      let destArray: EventSheetEvent[];
+      if (toRoot) {
+        destArray = sheet.events;
+      } else {
+        const destContainer = resolveNodeFromRef(sheet, op.to, undefined, _sidIndex, _symbolTable);
+        if (!hasChildren(destContainer)) {
+          throw new Error(`move-variable: destination "${op.to}" is not a container (has no children)`);
+        }
+        if (!destContainer.children) {
+          (destContainer as { children: EventSheetEvent[] }).children = [];
+        }
+        destArray = destContainer.children as EventSheetEvent[];
+      }
+
+      // Phase 1 supports only the two canonical directions (root ⇄ nested).
+      if (toRoot && isCurrentlyGlobal) {
+        throw new Error(`move-variable: variable "${variable.name}" is already global (at sheet root)`);
+      }
+      if (!toRoot && !isCurrentlyGlobal) {
+        throw new Error(
+          `move-variable: variable "${variable.name}" is already local. ` +
+            `Re-parenting between local scopes is not supported; promote to "root" first.`,
+        );
+      }
+      const direction: "toGlobal" | "toLocal" = toRoot ? "toGlobal" : "toLocal";
+
+      // Reject a name collision in the destination scope.
+      for (const ev of destArray) {
+        if (ev !== varNode && ev.eventType === "variable" && (ev as EventSheetVariable).name === variable.name) {
+          throw new Error(
+            `move-variable: ${toRoot ? "sheet root" : `destination "${op.to}"`} ` +
+              `already declares a variable named "${variable.name}"`,
+          );
+        }
+      }
+
+      // Rewrite localVars.X ⇄ runtime.globalVars.X within the variable's scope
+      // subtree. Promotion: the former local scope = the source container's
+      // children (== sourceArray). Demotion: the new local scope = destArray.
+      rewriteVarRefsInArray(direction === "toGlobal" ? sourceArray : destArray, variable.name, direction);
+
+      // Relocate the variable node (SID preserved).
+      const curIdx = sourceArray.indexOf(varNode);
+      sourceArray.splice(curIdx, 1);
+      let insertIdx = op.index ?? 0;
+      if (insertIdx < 0) insertIdx = 0;
+      if (insertIdx > destArray.length) insertIdx = destArray.length;
+      destArray.splice(insertIdx, 0, varNode);
+
+      // Globals are effectively always static; a demoted global must stay static
+      // to preserve persist-across-ticks semantics. Normalize in both directions.
+      variable.isStatic = true;
+
+      // Keep the SID index consistent for later ops in the same recipe.
+      _sidIndex.set(variable.sid, { node: varNode, parentArray: destArray, indexInParent: insertIdx });
+
+      // Register symbol if requested.
+      if (op.id !== undefined && op.id.startsWith("$")) {
+        _symbolTable.set(op.id, variable.sid);
+      }
+
+      break;
+    }
+
     default: {
       const exhaustive: never = op;
       throw new Error(`Unknown operation: ${(exhaustive as { op: string }).op}`);
@@ -1541,6 +1647,36 @@ function renameSymbol(
   }
 }
 
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Rewrite `localVars.NAME` ⇄ `runtime.globalVars.NAME` script references within
+ * the subtree rooted at `nodes`. Word-boundary anchored so `localVars.score`
+ * does not match `localVars.scoreMultiplier`. Used by move-variable to keep
+ * script references in sync with a variable's scope change.
+ */
+function rewriteVarRefsInArray(
+  nodes: EventSheetEvent[],
+  name: string,
+  direction: "toGlobal" | "toLocal",
+): void {
+  const escaped = escapeRegExp(name);
+  const fromRe =
+    direction === "toGlobal"
+      ? new RegExp(`\\blocalVars\\.${escaped}\\b`, "g")
+      : new RegExp(`\\bruntime\\.globalVars\\.${escaped}\\b`, "g");
+  const to = direction === "toGlobal" ? `runtime.globalVars.${name}` : `localVars.${name}`;
+  for (const action of walkScriptActionsInArray(nodes)) {
+    const joined = action.script.join("\n");
+    const result = joined.replace(fromRe, to);
+    if (result !== joined) {
+      action.script = result.split("\n");
+    }
+  }
+}
+
 // ─── Part 7: Recipe Orchestration ───
 
 // ─── Stale Path Detection & Auto-Adjust Helpers ───
@@ -1593,7 +1729,7 @@ function getOpPaths(op: FileOp): string[] {
   if ("path" in op && op.path !== undefined) return [op.path];
   if ("paths" in op && op.paths !== undefined) return [...op.paths];
   // Ops without path/paths default to "" (top-level)
-  if (op.op === "rename-symbol" || op.op === "add-include") return [];
+  if (op.op === "rename-symbol" || op.op === "add-include" || op.op === "move-variable") return [];
   return [""];
 }
 
@@ -1760,6 +1896,8 @@ export const VALID_OPS = new Set([
   "set-disabled",
   "rename-symbol",
   "patch-function-block",
+  "wrap-in-group",
+  "move-variable",
 ]);
 
 const INLINE_EVENT_KEYS = ["block", "function-block", "custom-ace-block", "variable", "group", "comment"];
@@ -1862,6 +2000,11 @@ export const OP_FIELD_SCHEMAS: Record<string, OpFieldSchema> = {
     required: ["events", "title"],
     optional: ["in", "id", "activeOnStart", "disabled"],
     misspellings: { event: "events", name: "title" },
+  },
+  "move-variable": {
+    required: ["variable", "to"],
+    optional: ["index", "id"],
+    misspellings: { name: "variable", into: "to", destination: "to", sid: "variable" },
   },
 };
 

@@ -14,6 +14,7 @@ import type {
   GroupEvent,
   FunctionParameter,
   ScriptAction,
+  Condition,
 } from "c3source";
 
 /**
@@ -175,6 +176,19 @@ function formatGroup(
 }
 
 /**
+ * Format a condition, prefixing `[DISABLED] ` when the condition has `disabled: true`
+ * in source JSON. Mirrors the prefix convention already used by `formatAction` from
+ * c3source for disabled actions. The `Condition` type in c3source does not declare a
+ * `disabled` field even though C3 stores it at runtime, so the check is structural.
+ */
+export function formatConditionWithDisabled(cond: Condition): string {
+  const disabled =
+    "disabled" in cond && (cond as Record<string, unknown>).disabled === true;
+  const condStr = formatCondition(cond);
+  return disabled ? `[DISABLED] ${condStr}` : condStr;
+}
+
+/**
  * Return a brief description of an action for the DSL coordinate index.
  * Much shorter than `formatAction` — just enough to identify the action type.
  */
@@ -242,7 +256,7 @@ function formatBlockLike(
 
   // Format conditions
   for (const cond of event.conditions) {
-    lines.push(`${indent}  when: ${formatCondition(cond)}`);
+    lines.push(`${indent}  when: ${formatConditionWithDisabled(cond)}`);
   }
 
   // Format actions

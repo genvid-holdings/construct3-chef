@@ -19,9 +19,8 @@ import {
   find_all_layouts_path,
   extractScriptsFromSheet,
   generateFunctionName,
-  formatCondition,
 } from "c3source";
-import { formatEventSheet, formatIndex } from "./dslFormatter.js";
+import { formatEventSheet, formatIndex, formatConditionWithDisabled } from "./dslFormatter.js";
 import { formatLayout, buildGlobalLayerMap, formatContainersFile } from "./layoutFormatter.js";
 import { type Logger } from "genvid-mcp-utils";
 export { type Logger } from "genvid-mcp-utils";
@@ -214,7 +213,7 @@ function formatExtractedFile(
     );
 
     if (script.conditions.length > 0) {
-      const condStr = script.conditions.map(formatCondition).join(", ");
+      const condStr = script.conditions.map(formatConditionWithDisabled).join(", ");
       lines.push(`// Context: ${condStr}`);
     }
 

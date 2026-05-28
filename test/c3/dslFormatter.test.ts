@@ -586,6 +586,81 @@ describe("formatEvent", () => {
     assert.deepEqual(lines, ["block [DISABLED]"]);
   });
 
+  it("prefixes disabled conditions with [DISABLED]", () => {
+    // `disabled` is not declared on the c3source `Condition` type, but C3 stores it
+    // at runtime — cast through `unknown` to model what source JSON actually carries.
+    const event = {
+      eventType: "block" as const,
+      conditions: [
+        {
+          id: "compare-boolean-eventvar",
+          objectClass: "GameState",
+          sid: 969513000111828,
+          parameters: { name: "hasCheckedTitleNewsPopup" },
+          disabled: true,
+        },
+      ],
+      actions: [],
+      sid: 100,
+    } as unknown as BlockEvent;
+    const entries = makeEntries();
+    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: [DISABLED] GameState.compare-boolean-eventvar(name=hasCheckedTitleNewsPopup)",
+    ]);
+  });
+
+  it("combines NOT and [DISABLED] on a single condition", () => {
+    const event = {
+      eventType: "block" as const,
+      conditions: [
+        {
+          id: "compare-boolean-eventvar",
+          objectClass: "GameState",
+          sid: 414452253306203,
+          parameters: { name: "hasCheckedTitleNewsPopup" },
+          isInverted: true,
+          disabled: true,
+        },
+      ],
+      actions: [],
+      sid: 100,
+    } as unknown as BlockEvent;
+    const entries = makeEntries();
+    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: [DISABLED] NOT GameState.compare-boolean-eventvar(name=hasCheckedTitleNewsPopup)",
+    ]);
+  });
+
+  it("renders enabled conditions without the [DISABLED] marker", () => {
+    // `disabled: false` and `disabled` omitted should both render bare — regression guard
+    // so the disabled detection doesn't fire on truthy-but-non-true values.
+    const event = {
+      eventType: "block" as const,
+      conditions: [
+        { id: "on-start-of-layout", objectClass: "System", sid: 1 },
+        {
+          id: "is-visible",
+          objectClass: "Sprite",
+          sid: 2,
+          disabled: false,
+        },
+      ],
+      actions: [],
+      sid: 100,
+    } as unknown as BlockEvent;
+    const entries = makeEntries();
+    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: System.on-start-of-layout()",
+      "  when: Sprite.is-visible()",
+    ]);
+  });
+
   it("formats a block with comment action (no do: prefix)", () => {
     const event: BlockEvent = {
       eventType: "block",

@@ -1,9 +1,10 @@
-import { describe, it, after } from "mocha";
+import { describe, it, after, beforeEach } from "mocha";
 import { assert } from "chai";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { applyRecipeInner } from "../../src/c3/recipeApplier.js";
+import { freshSidGen, type SidGenerator } from "../../src/c3/sidUtils.js";
 
 // The demotion safety guard in recipeApplier runs before the dry-run branch, so
 // applyRecipeInner({ dryRun: true }) exercises it without SID context or
@@ -69,13 +70,18 @@ const demoteRecipe = {
 };
 
 describe("move-variable demotion guard (recipeApplier)", () => {
+  let sidGen: SidGenerator;
+  beforeEach(() => {
+    sidGen = freshSidGen();
+  });
+
   it("refuses demotion when the global is referenced in another sheet", () => {
     const dir = makeProject({
       Globals: globalsSheet(),
       Other: sheetWithScript("Other", 900000000000002, "runtime.globalVars.score = 5;"),
     });
     assert.throws(
-      () => applyRecipeInner(dir, demoteRecipe, { dryRun: true, regenerate: false, log: noop }),
+      () => applyRecipeInner(sidGen, dir, demoteRecipe, { dryRun: true, regenerate: false, log: noop }),
       /cannot demote global variable "score".*referenced in 1 other event sheet\(s\): eventSheets[\\/]Other\.json/,
     );
   });
@@ -85,7 +91,7 @@ describe("move-variable demotion guard (recipeApplier)", () => {
       Globals: globalsSheet(),
       Other: sheetWithScript("Other", 900000000000002, "runtime.globalVars.health = 5;"),
     });
-    assert.doesNotThrow(() => applyRecipeInner(dir, demoteRecipe, { dryRun: true, regenerate: false, log: noop }));
+    assert.doesNotThrow(() => applyRecipeInner(sidGen, dir, demoteRecipe, { dryRun: true, regenerate: false, log: noop }));
   });
 
   it("does not run the cross-sheet scan for a promotion (to: root)", () => {
@@ -117,6 +123,6 @@ describe("move-variable demotion guard (recipeApplier)", () => {
       Globals: local,
       Other: sheetWithScript("Other", 900000000000002, "runtime.globalVars.score = 5;"),
     });
-    assert.doesNotThrow(() => applyRecipeInner(dir, promoteRecipe, { dryRun: true, regenerate: false, log: noop }));
+    assert.doesNotThrow(() => applyRecipeInner(sidGen, dir, promoteRecipe, { dryRun: true, regenerate: false, log: noop }));
   });
 });

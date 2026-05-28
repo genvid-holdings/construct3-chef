@@ -51,7 +51,7 @@ import {
   isCustomAction,
 } from "./eventSheetMutator.js";
 
-import { generateUniqueSid } from "./sidUtils.js";
+import type { SidGenerator } from "./sidUtils.js";
 
 // ─── Part 1: Recipe Format Types ───
 
@@ -459,12 +459,12 @@ export const SYSTEM_ACTION_IDS = new Set<string>([
   "signal",
 ]);
 
-export function expandAction(shorthand: BuilderAction): C3Action {
+export function expandAction(sidGen: SidGenerator, shorthand: BuilderAction): C3Action {
   if ("script" in shorthand) {
     return buildScriptAction({ script: shorthand.script });
   }
   if ("call" in shorthand) {
-    return buildCallAction({
+    return buildCallAction(sidGen, {
       callFunction: shorthand.call,
       parameters: shorthand.params?.map((p) => (typeof p === "string" ? p : String(p))),
     });
@@ -482,7 +482,7 @@ export function expandAction(shorthand: BuilderAction): C3Action {
         `custom-action "${shorthand["custom-action"]}" requires an "object" (or "objectClass") naming the target object class`,
       );
     }
-    return buildCustomAction({
+    return buildCustomAction(sidGen, {
       name: shorthand["custom-action"],
       objectClass,
       parameters: shorthand.params,
@@ -511,7 +511,7 @@ export function expandAction(shorthand: BuilderAction): C3Action {
     const params = shorthand.params
       ? Object.fromEntries(Object.entries(shorthand.params).map(([k, v]) => [k, String(v)]))
       : undefined;
-    return buildAction({
+    return buildAction(sidGen, {
       id: shorthand.id,
       objectClass,
       parameters: params,
@@ -521,12 +521,12 @@ export function expandAction(shorthand: BuilderAction): C3Action {
   throw new Error("Unrecognized action shorthand");
 }
 
-export function expandCondition(shorthand: BuilderCondition): Condition {
+export function expandCondition(sidGen: SidGenerator, shorthand: BuilderCondition): Condition {
   if ("else" in shorthand) {
-    return buildCondition({ id: "else", objectClass: "System" });
+    return buildCondition(sidGen, { id: "else", objectClass: "System" });
   }
   if ("trigger-once" in shorthand) {
-    return buildCondition({ id: "trigger-once-while-true", objectClass: "System" });
+    return buildCondition(sidGen, { id: "trigger-once-while-true", objectClass: "System" });
   }
   if ("id" in shorthand) {
     // Accept `objectClass` (the on-disk JSON field) as an alias for `object`.
@@ -534,7 +534,7 @@ export function expandCondition(shorthand: BuilderCondition): Condition {
     if (objectClass === undefined) {
       throw new Error(`Condition "${shorthand.id}" is missing its target object — add "object" (or "objectClass").`);
     }
-    return buildCondition({
+    return buildCondition(sidGen, {
       id: shorthand.id,
       objectClass,
       parameters: shorthand.params,
@@ -545,22 +545,22 @@ export function expandCondition(shorthand: BuilderCondition): Condition {
   throw new Error("Unrecognized condition shorthand");
 }
 
-export function expandEvent(shorthand: BuilderEvent): EventSheetEvent {
+export function expandEvent(sidGen: SidGenerator, shorthand: BuilderEvent): EventSheetEvent {
   if ("variable" in shorthand) {
-    return buildVariable(shorthand.variable);
+    return buildVariable(sidGen, shorthand.variable);
   }
   if ("block" in shorthand) {
     const b = shorthand.block;
-    return buildBlock({
-      conditions: b.conditions?.map(expandCondition),
-      actions: b.actions?.map(expandAction),
-      children: b.children?.map(expandEvent),
+    return buildBlock(sidGen, {
+      conditions: b.conditions?.map((c) => expandCondition(sidGen, c)),
+      actions: b.actions?.map((a) => expandAction(sidGen, a)),
+      children: b.children?.map((e) => expandEvent(sidGen, e)),
       isOrBlock: b.orBlock,
     });
   }
   if ("function-block" in shorthand) {
     const fb = shorthand["function-block"];
-    return buildFunctionBlock({
+    return buildFunctionBlock(sidGen, {
       functionName: fb.name,
       params: fb.params,
       returnType: fb.returnType,
@@ -568,13 +568,13 @@ export function expandEvent(shorthand: BuilderEvent): EventSheetEvent {
       copyPicked: fb.copyPicked,
       description: fb.description,
       category: fb.category,
-      actions: fb.actions?.map(expandAction),
-      children: fb.children?.map(expandEvent),
+      actions: fb.actions?.map((a) => expandAction(sidGen, a)),
+      children: fb.children?.map((e) => expandEvent(sidGen, e)),
     });
   }
   if ("custom-ace-block" in shorthand) {
     const cab = shorthand["custom-ace-block"];
-    return buildCustomAceBlock({
+    return buildCustomAceBlock(sidGen, {
       aceName: cab.name,
       objectClass: cab.object,
       aceType: cab.aceType,
@@ -584,15 +584,15 @@ export function expandEvent(shorthand: BuilderEvent): EventSheetEvent {
       copyPicked: cab.copyPicked,
       description: cab.description,
       category: cab.category,
-      actions: cab.actions?.map(expandAction),
-      children: cab.children?.map(expandEvent),
+      actions: cab.actions?.map((a) => expandAction(sidGen, a)),
+      children: cab.children?.map((e) => expandEvent(sidGen, e)),
     });
   }
   if ("group" in shorthand) {
     const g = shorthand.group;
-    return buildGroup({
+    return buildGroup(sidGen, {
       title: g.title,
-      children: g.children?.map(expandEvent),
+      children: g.children?.map((e) => expandEvent(sidGen, e)),
       activeOnStart: g.activeOnStart,
       disabled: g.disabled,
     });
@@ -740,6 +740,7 @@ function resolveNodeFromRef(
 // ─── Part 5: Operation Execution ───
 
 export function executeOp(
+  sidGen: SidGenerator,
   sheet: EventSheet,
   op: FileOp,
   sidIndex?: SidIndex,
@@ -750,7 +751,7 @@ export function executeOp(
   switch (op.op) {
     case "insert-event": {
       const builderEvent = extractInlineEvent(op);
-      const expanded = expandEvent(builderEvent);
+      const expanded = expandEvent(sidGen, builderEvent);
 
       // Register symbol if `id` is set (for later $symbol lookups)
       const newSid = typeof (expanded as { sid?: unknown }).sid === "number"
@@ -836,7 +837,7 @@ export function executeOp(
         for (let i = 0; i < op.variables.length; i++) {
           const item = op.variables[i];
           const opts = "variable" in item ? item.variable : item;
-          const variable = buildVariable(opts);
+          const variable = buildVariable(sidGen, opts);
           children.splice(op.after + 1 + i, 0, variable);
         }
       } else {
@@ -844,7 +845,7 @@ export function executeOp(
         for (let i = 0; i < op.variables.length; i++) {
           const item = op.variables[i];
           const opts = "variable" in item ? item.variable : item;
-          const variable = buildVariable(opts);
+          const variable = buildVariable(sidGen, opts);
           insertEvent(sheet, path, op.after + 1 + i, variable);
         }
       }
@@ -859,7 +860,7 @@ export function executeOp(
         }
         const actions = targetNode.actions as C3Action[];
         for (let i = 0; i < op.actions.length; i++) {
-          const action = expandAction(op.actions[i]);
+          const action = expandAction(sidGen, op.actions[i]);
           const insertIdx = op.after + 1 + i;
           const resolved = insertIdx < 0 ? actions.length : Math.min(insertIdx, actions.length);
           actions.splice(resolved, 0, action);
@@ -868,7 +869,7 @@ export function executeOp(
         const paths = resolvePaths(op);
         for (const p of paths) {
           for (let i = 0; i < op.actions.length; i++) {
-            const action = expandAction(op.actions[i]);
+            const action = expandAction(sidGen, op.actions[i]);
             insertAction(sheet, p, op.after + 1 + i, action);
           }
         }
@@ -884,7 +885,7 @@ export function executeOp(
         }
         const condBlock = targetNode as { conditions: Condition[] };
         for (let i = 0; i < op.conditions.length; i++) {
-          const condition = expandCondition(op.conditions[i]);
+          const condition = expandCondition(sidGen, op.conditions[i]);
           const insertIdx = op.after + 1 + i;
           const resolved = insertIdx < 0 ? condBlock.conditions.length : Math.min(insertIdx, condBlock.conditions.length);
           condBlock.conditions.splice(resolved, 0, condition);
@@ -893,7 +894,7 @@ export function executeOp(
         const paths = resolvePaths(op);
         for (const p of paths) {
           for (let i = 0; i < op.conditions.length; i++) {
-            const condition = expandCondition(op.conditions[i]);
+            const condition = expandCondition(sidGen, op.conditions[i]);
             insertCondition(sheet, p, op.after + 1 + i, condition);
           }
         }
@@ -902,7 +903,7 @@ export function executeOp(
     }
 
     case "replace-action": {
-      const action = expandAction(op.action);
+      const action = expandAction(sidGen, op.action);
       if (op.in !== undefined) {
         const targetNode = resolveNodeFromRef(sheet, op.in, undefined, _sidIndex, _symbolTable);
         if (!hasActions(targetNode)) {
@@ -923,7 +924,7 @@ export function executeOp(
     }
 
     case "replace-condition": {
-      const condition = expandCondition(op.condition);
+      const condition = expandCondition(sidGen, op.condition);
       if (op.in !== undefined) {
         const targetNode = resolveNodeFromRef(sheet, op.in, undefined, _sidIndex, _symbolTable);
         if (!(targetNode.eventType === "block" || targetNode.eventType === "function-block" || targetNode.eventType === "custom-ace-block")) {
@@ -945,7 +946,7 @@ export function executeOp(
 
     case "replace-event": {
       const builderEvent = extractInlineEvent(op);
-      const expanded = expandEvent(builderEvent);
+      const expanded = expandEvent(sidGen, builderEvent);
       const path = op.path ?? "";
       replaceEvent(sheet, path, op.index, expanded);
       break;
@@ -1132,18 +1133,20 @@ export function executeOp(
             case "boolean": return "false";
           }
         };
-        const newParam: FunctionParameter = {
-          name: op.addParam.name,
-          type: op.addParam.type,
-          initialValue: op.addParam.initialValue ?? defaultInitialValue(op.addParam.type),
-          sid: generateUniqueSid(),
-        };
+        // Validate uniqueness BEFORE minting a SID so a rejected op doesn't burn
+        // a SID slot from the shared used-set.
         const duplicate = fnNode.functionParameters.some((p) => p.name === op.addParam!.name);
         if (duplicate) {
           throw new Error(
             `patch-function-block: parameter "${op.addParam.name}" already exists on function "${(fnNode as FunctionBlockEvent).functionName ?? (fnNode as CustomAceBlockEvent).aceName}"`,
           );
         }
+        const newParam: FunctionParameter = {
+          name: op.addParam.name,
+          type: op.addParam.type,
+          initialValue: op.addParam.initialValue ?? defaultInitialValue(op.addParam.type),
+          sid: sidGen(),
+        };
         fnNode.functionParameters.push(newParam);
       }
       if (op.removeParam) {
@@ -1195,7 +1198,7 @@ export function executeOp(
       const insertPos = Math.min(...currentIndices);
 
       // Build group
-      const group = buildGroup({
+      const group = buildGroup(sidGen, {
         title: op.title,
         children: [],
         activeOnStart: op.activeOnStart,
@@ -1752,7 +1755,7 @@ function isAffectedByShift(targetPath: string, arraySegment: string, shiftAt: nu
 }
 
 
-export function executeFileOps(sheet: EventSheet, ops: FileOp[], options?: { autoAdjust?: boolean }): void {
+export function executeFileOps(sidGen: SidGenerator, sheet: EventSheet, ops: FileOp[], options?: { autoAdjust?: boolean }): void {
   // autoAdjust is deprecated — SID-based addressing ("in": "sid:X") supersedes it
   if (options?.autoAdjust) {
     console.warn('autoAdjust is deprecated — use SID-based addressing ("in": "sid:X") instead');
@@ -1792,7 +1795,7 @@ export function executeFileOps(sheet: EventSheet, ops: FileOp[], options?: { aut
 
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i];
-    executeOp(sheet, op, sidIndex, symbolTable);
+    executeOp(sidGen, sheet, op, sidIndex, symbolTable);
 
     // Warning mode: scan remaining ops for potentially affected paths (skip SID-addressed ops)
     const shift = getShiftInfo(op, sheet);
@@ -1832,11 +1835,11 @@ export function executeFileOps(sheet: EventSheet, ops: FileOp[], options?: { aut
   }
 }
 
-export function createSheet(name: string, events: BuilderEvent[]): EventSheet {
+export function createSheet(sidGen: SidGenerator, name: string, events: BuilderEvent[]): EventSheet {
   return {
     name,
-    events: events.map(expandEvent),
-    sid: generateUniqueSid(),
+    events: events.map((e) => expandEvent(sidGen, e)),
+    sid: sidGen(),
   };
 }
 
@@ -1850,6 +1853,7 @@ export interface RecipeResult {
 }
 
 export function executeRecipe(
+  sidGen: SidGenerator,
   recipe: Recipe,
   loadSheet: (path: string) => EventSheet,
 ): RecipeResult {
@@ -1859,11 +1863,11 @@ export function executeRecipe(
   for (const [filePath, entry] of Object.entries(recipe.files ?? {})) {
     if (isFileCreate(entry)) {
       const name = extractSheetName(filePath);
-      const sheet = createSheet(name, entry.events);
+      const sheet = createSheet(sidGen, name, entry.events);
       created.set(filePath, sheet);
     } else {
       const sheet = loadSheet(filePath);
-      executeFileOps(sheet, entry, { autoAdjust: recipe.autoAdjust });
+      executeFileOps(sidGen, sheet, entry, { autoAdjust: recipe.autoAdjust });
       modified.set(filePath, sheet);
     }
   }

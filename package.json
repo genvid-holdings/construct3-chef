@@ -11,7 +11,8 @@
 	},
 	"exports": {
 		".": "./src/index.ts",
-		"./mcp": "./src/mcp/server.ts"
+		"./mcp": "./src/mcp/server.ts",
+		"./sid-utils": "./src/c3/sidUtils.ts"
 	},
 	"files": [
 		"dist",
@@ -30,6 +31,10 @@
 			"./mcp": {
 				"types": "./dist/mcp/server.d.ts",
 				"default": "./dist/mcp/server.js"
+			},
+			"./sid-utils": {
+				"types": "./dist/c3/sidUtils.d.ts",
+				"default": "./dist/c3/sidUtils.js"
 			}
 		}
 	},

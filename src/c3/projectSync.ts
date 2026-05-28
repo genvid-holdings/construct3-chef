@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import type { Logger } from "genvid-mcp-utils";
+import { mintUniqueSid } from "./sidUtils.js";
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -136,13 +137,13 @@ export function collectAllSids(project: any): Set<number> {
 	return sids;
 }
 
+/**
+ * Deprecated thin wrapper kept for backward compatibility. Delegates to
+ * `mintUniqueSid` from sidUtils — strict [1e14, 1e15) range with a 100-attempt
+ * collision cap (vs. the historical unbounded `do/while` in this file).
+ */
 export function generateSid(existingSids: Set<number>): number {
-	let sid: number;
-	do {
-		sid = Math.floor(Math.random() * 900000000000000) + 100000000000000;
-	} while (existingSids.has(sid));
-	existingSids.add(sid);
-	return sid;
+	return mintUniqueSid(existingSids);
 }
 
 // ---------------------------------------------------------------------------

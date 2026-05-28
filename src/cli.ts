@@ -15,6 +15,7 @@ import { applyParsed, renameSymbols } from "./c3/recipeApplier.js";
 import type { Recipe } from "./c3/recipeInterpreter.js";
 import { ALL_SECTION_KEYS, runSync } from "./c3/projectSync.js";
 import { collectAllUids, cloneLayout } from "./c3/layoutScaffold.js";
+import { readRegistryFile } from "./c3/sidUtils.js";
 import {
   collectAllObjectTypeSids,
   collectMaxImageSpriteId,
@@ -186,7 +187,11 @@ yargs(hideBin(process.argv))
       const outPath = path.resolve(argv.out);
       const source = JSON.parse(readFileSync(sourcePath, "utf-8")) as Record<string, unknown>;
       const existingUids = collectAllUids(path.join(rootDir, "layouts"));
-      const cloned = cloneLayout(source, { name: argv.name, eventSheet: argv.eventSheet, existingUids });
+      // Seed clone-SID minting against the project-wide registry so cloned SIDs can't
+      // collide with anything in eventSheets/, layouts/, or objectTypes/.
+      const registryPath = path.join(rootDir, "extracted", "sid-registry.txt");
+      const existingSids = existsSync(registryPath) ? readRegistryFile(registryPath) : new Set<number>();
+      const cloned = cloneLayout(source, { name: argv.name, eventSheet: argv.eventSheet, existingUids, existingSids });
       writeFileSync(outPath, JSON.stringify(cloned, null, "\t") + "\n");
       console.log(`Scaffolded ${argv.name} → ${path.relative(rootDir, outPath)}`);
       runSync(rootDir, false, console.log);

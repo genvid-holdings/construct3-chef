@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach } from "mocha";
+import { describe, it, beforeEach } from "mocha";
 import { assert } from "chai";
 import type {
   EventSheet,
@@ -37,7 +37,7 @@ import {
   type CustomAction,
   type VariableEvent,
 } from "../../src/c3/eventSheetMutator.js";
-import { initSidContextFromSet, resetSidContext } from "../../src/c3/sidUtils.js";
+import { freshSidGen, type SidGenerator } from "../../src/c3/sidUtils.js";
 
 function makeSheet(...events: EventSheetEvent[]): EventSheet {
   return { name: "TestSheet", events, sid: 0 };
@@ -51,15 +51,14 @@ function makeCondition(id: string): Condition {
   return { id, objectClass: "System", sid: 1 };
 }
 
-beforeEach(() => {
-  initSidContextFromSet(new Set());
-});
+describe("eventSheetMutator", () => {
+  let sidGen: SidGenerator;
 
-afterEach(() => {
-  resetSidContext();
-});
+  beforeEach(() => {
+    sidGen = freshSidGen();
+  });
 
-describe("resolveNode and getEventsArray", () => {
+  describe("resolveNode and getEventsArray", () => {
   it("insertEvent with empty path targets sheet.events", () => {
     const sheet = makeSheet();
     insertEvent(sheet, "", 0, makeBlock());
@@ -145,7 +144,7 @@ describe("resolveNode and getEventsArray", () => {
 
 describe("buildBlock", () => {
   it("builds minimal block with defaults", () => {
-    const block = buildBlock();
+    const block = buildBlock(sidGen);
     assert.deepStrictEqual(block.eventType, "block");
     assert.deepStrictEqual(block.conditions, []);
     assert.deepStrictEqual(block.actions, []);
@@ -155,14 +154,14 @@ describe("buildBlock", () => {
   });
 
   it("builds block with isOrBlock", () => {
-    const block = buildBlock({ isOrBlock: true });
+    const block = buildBlock(sidGen, { isOrBlock: true });
     assert.equal((block as BlockEvent & { isOrBlock: boolean }).isOrBlock, true);
   });
 
   it("builds block with conditions and actions", () => {
     const conds = [makeCondition("test-cond")];
-    const actions = [buildAction({ id: "set-text", objectClass: "Text", parameters: { text: "hi" } })];
-    const block = buildBlock({ conditions: conds, actions });
+    const actions = [buildAction(sidGen, { id: "set-text", objectClass: "Text", parameters: { text: "hi" } })];
+    const block = buildBlock(sidGen, { conditions: conds, actions });
     assert.equal(block.conditions.length, 1);
     assert.equal(block.conditions[0].id, "test-cond");
     assert.equal(block.actions.length, 1);
@@ -171,7 +170,7 @@ describe("buildBlock", () => {
 
 describe("buildFunctionBlock", () => {
   it("builds with defaults", () => {
-    const fb = buildFunctionBlock({ functionName: "myFunc" });
+    const fb = buildFunctionBlock(sidGen, { functionName: "myFunc" });
     assert.equal(fb.eventType, "function-block");
     assert.equal(fb.functionName, "myFunc");
     assert.equal(fb.functionReturnType, "none");
@@ -184,7 +183,7 @@ describe("buildFunctionBlock", () => {
   });
 
   it("builds with params", () => {
-    const fb = buildFunctionBlock({
+    const fb = buildFunctionBlock(sidGen, {
       functionName: "calc",
       params: [
         { name: "x", type: "number" },
@@ -204,7 +203,7 @@ describe("buildFunctionBlock", () => {
   });
 
   it("builds with returnType and isAsync", () => {
-    const fb = buildFunctionBlock({ functionName: "f", returnType: "number", isAsync: true });
+    const fb = buildFunctionBlock(sidGen, { functionName: "f", returnType: "number", isAsync: true });
     assert.equal(fb.functionReturnType, "number");
     assert.equal(fb.functionIsAsync, true);
   });
@@ -212,7 +211,7 @@ describe("buildFunctionBlock", () => {
 
 describe("buildAction", () => {
   it("builds standard action", () => {
-    const action = buildAction({ id: "set-text", objectClass: "Text", parameters: { text: "hello" } });
+    const action = buildAction(sidGen, { id: "set-text", objectClass: "Text", parameters: { text: "hello" } });
     assert.notEqual(action.sid, 0);
     assert.equal(action.id, "set-text");
     assert.equal(action.objectClass, "Text");
@@ -220,7 +219,7 @@ describe("buildAction", () => {
   });
 
   it("builds action without optional fields", () => {
-    const action = buildAction({ id: "destroy", objectClass: "Enemy" });
+    const action = buildAction(sidGen, { id: "destroy", objectClass: "Enemy" });
     assert.equal(action.id, "destroy");
     assert.equal(action.objectClass, "Enemy");
     assert.notProperty(action, "parameters");
@@ -228,7 +227,7 @@ describe("buildAction", () => {
   });
 
   it("builds action with behaviorType", () => {
-    const action = buildAction({ id: "start-timer", objectClass: "BossHPBar", behaviorType: "Timer" });
+    const action = buildAction(sidGen, { id: "start-timer", objectClass: "BossHPBar", behaviorType: "Timer" });
     assert.equal(action.behaviorType, "Timer");
     assert.notEqual(action.sid, 0);
   });
@@ -236,14 +235,14 @@ describe("buildAction", () => {
 
 describe("buildCallAction", () => {
   it("builds with parameters", () => {
-    const action = buildCallAction({ callFunction: "playSFX", parameters: ['"click"'] });
+    const action = buildCallAction(sidGen, { callFunction: "playSFX", parameters: ['"click"'] });
     assert.notEqual(action.sid, 0);
     assert.equal(action.callFunction, "playSFX");
     assert.deepStrictEqual(action.parameters, ['"click"']);
   });
 
   it("builds without parameters", () => {
-    const action = buildCallAction({ callFunction: "doStuff" });
+    const action = buildCallAction(sidGen, { callFunction: "doStuff" });
     assert.equal(action.callFunction, "doStuff");
     assert.notProperty(action, "parameters");
   });
@@ -374,20 +373,20 @@ describe("replaceEvent", () => {
 
 describe("insertAction", () => {
   it("inserts action at beginning", () => {
-    const existingAction = buildAction({ id: "existing", objectClass: "Obj" });
+    const existingAction = buildAction(sidGen, { id: "existing", objectClass: "Obj" });
     const block = makeBlock({ actions: [existingAction] });
     const sheet = makeSheet(block);
-    const newAction = buildAction({ id: "new", objectClass: "Obj" });
+    const newAction = buildAction(sidGen, { id: "new", objectClass: "Obj" });
     insertAction(sheet, "events[0]", 0, newAction);
     assert.equal(block.actions.length, 2);
     assert.equal((block.actions[0] as StandardAction).id, "new");
   });
 
   it("appends action with -1", () => {
-    const existingAction = buildAction({ id: "existing", objectClass: "Obj" });
+    const existingAction = buildAction(sidGen, { id: "existing", objectClass: "Obj" });
     const block = makeBlock({ actions: [existingAction] });
     const sheet = makeSheet(block);
-    const newAction = buildAction({ id: "appended", objectClass: "Obj" });
+    const newAction = buildAction(sidGen, { id: "appended", objectClass: "Obj" });
     insertAction(sheet, "events[0]", -1, newAction);
     assert.equal(block.actions.length, 2);
     assert.equal((block.actions[1] as StandardAction).id, "appended");
@@ -395,7 +394,10 @@ describe("insertAction", () => {
 
   it("throws for empty jsonPath", () => {
     const sheet = makeSheet(makeBlock());
-    assert.throws(() => insertAction(sheet, "", 0, buildAction({ id: "x", objectClass: "Y" })), /must not be empty/);
+    assert.throws(
+      () => insertAction(sheet, "", 0, buildAction(sidGen, { id: "x", objectClass: "Y" })),
+      /must not be empty/,
+    );
   });
 
   it("throws for event without actions", () => {
@@ -409,7 +411,7 @@ describe("insertAction", () => {
     };
     const sheet = makeSheet(group);
     assert.throws(
-      () => insertAction(sheet, "events[0]", 0, buildAction({ id: "x", objectClass: "Y" })),
+      () => insertAction(sheet, "events[0]", 0, buildAction(sidGen, { id: "x", objectClass: "Y" })),
       /Cannot access actions/,
     );
   });
@@ -417,8 +419,8 @@ describe("insertAction", () => {
 
 describe("removeAction", () => {
   it("removes and returns action", () => {
-    const action1 = buildAction({ id: "first", objectClass: "A" });
-    const action2 = buildAction({ id: "second", objectClass: "B" });
+    const action1 = buildAction(sidGen, { id: "first", objectClass: "A" });
+    const action2 = buildAction(sidGen, { id: "second", objectClass: "B" });
     const block = makeBlock({ actions: [action1, action2] });
     const sheet = makeSheet(block);
     const removed = removeAction(sheet, "events[0]", 0) as StandardAction;
@@ -435,19 +437,19 @@ describe("removeAction", () => {
 
 describe("replaceAction", () => {
   it("replaces action at index", () => {
-    const action = buildAction({ id: "original", objectClass: "X" });
+    const action = buildAction(sidGen, { id: "original", objectClass: "X" });
     const block = makeBlock({ actions: [action] });
     const sheet = makeSheet(block);
-    const replacement = buildAction({ id: "replaced", objectClass: "X" });
+    const replacement = buildAction(sidGen, { id: "replaced", objectClass: "X" });
     replaceAction(sheet, "events[0]", 0, replacement);
     assert.equal((block.actions[0] as StandardAction).id, "replaced");
   });
 
   it("throws for invalid index", () => {
-    const block = makeBlock({ actions: [buildAction({ id: "a", objectClass: "X" })] });
+    const block = makeBlock({ actions: [buildAction(sidGen, { id: "a", objectClass: "X" })] });
     const sheet = makeSheet(block);
     assert.throws(
-      () => replaceAction(sheet, "events[0]", 5, buildAction({ id: "b", objectClass: "Y" })),
+      () => replaceAction(sheet, "events[0]", 5, buildAction(sidGen, { id: "b", objectClass: "Y" })),
       /out of bounds/,
     );
   });
@@ -501,7 +503,7 @@ describe("replaceCondition", () => {
 
 describe("buildVariable", () => {
   it("builds string variable with defaults", () => {
-    const v = buildVariable({ name: "myStr", type: "string" });
+    const v = buildVariable(sidGen, { name: "myStr", type: "string" });
     assert.equal(v.eventType, "variable");
     assert.equal(v.name, "myStr");
     assert.equal(v.type, "string");
@@ -513,68 +515,68 @@ describe("buildVariable", () => {
   });
 
   it("builds number variable with defaults", () => {
-    const v = buildVariable({ name: "count", type: "number" });
+    const v = buildVariable(sidGen, { name: "count", type: "number" });
     assert.equal(v.type, "number");
     assert.equal(v.initialValue, "0");
   });
 
   it("builds boolean variable with defaults", () => {
-    const v = buildVariable({ name: "flag", type: "boolean" });
+    const v = buildVariable(sidGen, { name: "flag", type: "boolean" });
     assert.equal(v.type, "boolean");
     assert.equal(v.initialValue, "false");
   });
 
   it("builds constant variable", () => {
-    const v = buildVariable({ name: "MAX", type: "number", constant: true });
+    const v = buildVariable(sidGen, { name: "MAX", type: "number", constant: true });
     assert.equal(v.isConstant, true);
     assert.equal(v.isStatic, true);
   });
 
   it("builds static non-constant variable", () => {
-    const v = buildVariable({ name: "shared", type: "string", static: true });
+    const v = buildVariable(sidGen, { name: "shared", type: "string", static: true });
     assert.equal(v.isStatic, true);
     assert.equal(v.isConstant, false);
   });
 
   it("builds variable with custom value", () => {
-    const v = buildVariable({ name: "greeting", type: "string", value: "hello" });
+    const v = buildVariable(sidGen, { name: "greeting", type: "string", value: "hello" });
     assert.equal(v.initialValue, "hello");
   });
 
   it("accepts initialValue as alias for value", () => {
-    const v = buildVariable({ name: "greeting", type: "string", initialValue: "hello" });
+    const v = buildVariable(sidGen, { name: "greeting", type: "string", initialValue: "hello" });
     assert.equal(v.initialValue, "hello");
   });
 
   it("accepts isStatic as alias for static", () => {
-    const v = buildVariable({ name: "shared", type: "string", isStatic: true });
+    const v = buildVariable(sidGen, { name: "shared", type: "string", isStatic: true });
     assert.equal(v.isStatic, true);
     assert.equal(v.isConstant, false);
   });
 
   it("accepts isConstant as alias for constant", () => {
-    const v = buildVariable({ name: "MAX", type: "number", isConstant: true });
+    const v = buildVariable(sidGen, { name: "MAX", type: "number", isConstant: true });
     assert.equal(v.isConstant, true);
     assert.equal(v.isStatic, true);
   });
 
   it("throws when both value and initialValue are provided", () => {
     assert.throws(
-      () => buildVariable({ name: "X", type: "string", value: "a", initialValue: "b" }),
+      () => buildVariable(sidGen, { name: "X", type: "string", value: "a", initialValue: "b" }),
       /cannot specify both "value" and "initialValue"/,
     );
   });
 
   it("throws when both constant and isConstant are provided", () => {
     assert.throws(
-      () => buildVariable({ name: "X", type: "number", constant: true, isConstant: false }),
+      () => buildVariable(sidGen, { name: "X", type: "number", constant: true, isConstant: false }),
       /cannot specify both "constant" and "isConstant"/,
     );
   });
 
   it("throws when both static and isStatic are provided", () => {
     assert.throws(
-      () => buildVariable({ name: "X", type: "number", static: true, isStatic: false }),
+      () => buildVariable(sidGen, { name: "X", type: "number", static: true, isStatic: false }),
       /cannot specify both "static" and "isStatic"/,
     );
   });
@@ -582,14 +584,14 @@ describe("buildVariable", () => {
 
 describe("buildCondition", () => {
   it("builds minimal condition", () => {
-    const c = buildCondition({ id: "on-start", objectClass: "System" });
+    const c = buildCondition(sidGen, { id: "on-start", objectClass: "System" });
     assert.equal(c.id, "on-start");
     assert.equal(c.objectClass, "System");
     assert.notEqual(c.sid, 0);
   });
 
   it("builds condition with parameters", () => {
-    const c = buildCondition({
+    const c = buildCondition(sidGen, {
       id: "compare-two-values",
       objectClass: "System",
       parameters: { first: "1", second: "2", comparison: 0 },
@@ -598,17 +600,17 @@ describe("buildCondition", () => {
   });
 
   it("builds inverted condition", () => {
-    const c = buildCondition({ id: "is-visible", objectClass: "Sprite", isInverted: true });
+    const c = buildCondition(sidGen, { id: "is-visible", objectClass: "Sprite", isInverted: true });
     assert.equal(c.isInverted, true);
   });
 
   it("builds condition with behaviorType", () => {
-    const c = buildCondition({ id: "on-timer", objectClass: "Enemy", behaviorType: "Timer" });
+    const c = buildCondition(sidGen, { id: "on-timer", objectClass: "Enemy", behaviorType: "Timer" });
     assert.equal(c.behaviorType, "Timer");
   });
 
   it("omits optional fields when not provided", () => {
-    const c = buildCondition({ id: "on-start", objectClass: "System" });
+    const c = buildCondition(sidGen, { id: "on-start", objectClass: "System" });
     assert.notProperty(c, "parameters");
     assert.notProperty(c, "isInverted");
     assert.notProperty(c, "behaviorType");
@@ -617,7 +619,7 @@ describe("buildCondition", () => {
 
 describe("buildGroup", () => {
   it("builds group with defaults", () => {
-    const g = buildGroup({ title: "My Group" });
+    const g = buildGroup(sidGen, { title: "My Group" });
     assert.equal(g.eventType, "group");
     assert.equal(g.title, "My Group");
     assert.equal(g.disabled, false);
@@ -628,14 +630,14 @@ describe("buildGroup", () => {
   });
 
   it("builds group with children", () => {
-    const child = buildBlock();
-    const g = buildGroup({ title: "Parent", children: [child] });
+    const child = buildBlock(sidGen);
+    const g = buildGroup(sidGen, { title: "Parent", children: [child] });
     assert.equal(g.children.length, 1);
     assert.equal(g.children[0].eventType, "block");
   });
 
   it("builds inactive group", () => {
-    const g = buildGroup({ title: "Lazy", activeOnStart: false });
+    const g = buildGroup(sidGen, { title: "Lazy", activeOnStart: false });
     assert.equal(g.isActiveOnStart, false);
   });
 });
@@ -666,14 +668,14 @@ describe("buildCommentAction", () => {
 
 describe("buildCustomAction", () => {
   it("builds custom action with name and objectClass", () => {
-    const a = buildCustomAction({ name: "Initialize", objectClass: "CardScroller" });
+    const a = buildCustomAction(sidGen, { name: "Initialize", objectClass: "CardScroller" });
     assert.equal(a.customAction, "Initialize");
     assert.equal(a.objectClass, "CardScroller");
     assert.notEqual(a.sid, 0);
   });
 
   it("builds custom action with parameters", () => {
-    const a = buildCustomAction({
+    const a = buildCustomAction(sidGen, {
       name: "SetValue",
       objectClass: "MyPlugin",
       parameters: ["health", 100],
@@ -682,24 +684,24 @@ describe("buildCustomAction", () => {
   });
 
   it("omits parameters when not provided", () => {
-    const a = buildCustomAction({ name: "Reset", objectClass: "Timer" });
+    const a = buildCustomAction(sidGen, { name: "Reset", objectClass: "Timer" });
     assert.notProperty(a, "parameters");
   });
 });
 
 describe("buildFunctionBlock (extended)", () => {
   it("builds with description", () => {
-    const fb = buildFunctionBlock({ functionName: "doWork", description: "Does important work" });
+    const fb = buildFunctionBlock(sidGen, { functionName: "doWork", description: "Does important work" });
     assert.equal(fb.functionDescription, "Does important work");
   });
 
   it("builds with category", () => {
-    const fb = buildFunctionBlock({ functionName: "doWork", category: "Utilities" });
+    const fb = buildFunctionBlock(sidGen, { functionName: "doWork", category: "Utilities" });
     assert.equal(fb.functionCategory, "Utilities");
   });
 
   it("builds with copyPicked", () => {
-    const fb = buildFunctionBlock({ functionName: "onTap", copyPicked: true });
+    const fb = buildFunctionBlock(sidGen, { functionName: "onTap", copyPicked: true });
     assert.equal(fb.functionCopyPicked, true);
   });
 });
@@ -764,4 +766,5 @@ describe("buildSidIndex", () => {
 
     assert.equal(index.size, 0);
   });
+});
 });

@@ -16,8 +16,11 @@ import {
   generateLayoutSummaries,
   generateTemplateScope,
   generateSidRegistry,
+  findJsonFiles,
+  SID_SOURCE_DIRS,
 } from "../c3/generators.js";
 import { runSync } from "../c3/projectSync.js";
+import { readRegistryFile, mintUniqueSid } from "../c3/sidUtils.js";
 import { filterIndex, buildShallowSidMap } from "../c3/dslFormatter.js";
 import type { EventSheet } from "c3source";
 import { resolveIncludeTree, formatIncludeTree, flattenIncludeTree } from "../c3/includeTree.js";
@@ -56,6 +59,9 @@ const expectedChanges = new ExpectedChanges();
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true } as const;
 const REGENERATE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true } as const;
 const MUTATE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false } as const;
+// Reads source files only (no project mutation) but returns different output per call —
+// e.g. random-SID minting. Clients must NOT treat as idempotent for retry/cache purposes.
+const NON_IDEMPOTENT_READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: false } as const;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,6 +146,49 @@ function checkSourceFreshness(sourcePath: string, extractedPath: string): void {
     }
   } catch {
     // Either file missing — skip check silently
+  }
+}
+
+/**
+ * Multi-source variant of checkSourceFreshness for `sid-registry.txt`, which is
+ * derived from many source files (eventSheets/, layouts/, objectTypes/).
+ * Walks each source dir, finds the newest JSON mtime, compares against the
+ * registry mtime, and marks `extractedDirty` if any source is newer.
+ *
+ * This catches external edits (git checkout, atomic-rename saves, network mounts)
+ * that the fs.watch watcher may have missed before the watcher event delivers.
+ */
+function checkRegistryFreshness(registryPath: string): void {
+  if (extractedDirty) return; // Already known stale; skip the scan.
+  let registryMtime: number;
+  try {
+    registryMtime = fs.statSync(registryPath).mtimeMs;
+  } catch {
+    return; // No registry → can't compare; callers handle the missing-file case separately.
+  }
+  let newestSourceMtime = 0;
+  for (const dir of SID_SOURCE_DIRS) {
+    let files: string[];
+    try {
+      files = findJsonFiles(path.join(PROJECT_ROOT, dir));
+    } catch {
+      continue; // Directory vanished mid-walk — try the next dir.
+    }
+    for (const file of files) {
+      try {
+        const m = fs.statSync(file).mtimeMs;
+        if (m > newestSourceMtime) newestSourceMtime = m;
+      } catch {
+        // Per-file TOCTOU (atomic-rename save, antivirus quarantine, network mount glitch) —
+        // skip this file and keep scanning. Aborting the whole loop would mask later staleness.
+        continue;
+      }
+    }
+  }
+  if (newestSourceMtime > registryMtime) {
+    extractedDirty = true;
+    txId++;
+    emitLog("warning", "Stale detected: source newer than sid-registry.txt");
   }
 }
 
@@ -455,6 +504,57 @@ server.registerTool(
 );
 
 server.registerTool(
+  "generate-sids",
+  {
+    title: "Generate Unique SIDs",
+    description:
+      "Mint fresh unique C3 SIDs in the [1e14, 1e15) range, seeded from sid-registry.txt (which covers eventSheets/, layouts/, and objectTypes/). " +
+      "Returns `count` SIDs that don't collide with each other within this call or with any SID in the registry. " +
+      "Minted SIDs are NOT persisted to the registry — to avoid re-drawing them across calls, write them into source files and run 'regenerate', or pass them as `extraUsedSids` on the next call.",
+    annotations: NON_IDEMPOTENT_READ,
+    inputSchema: {
+      count: z.number().int().min(1).max(100).optional()
+        .describe("Number of SIDs to mint (default: 1, max: 100)."),
+      extraUsedSids: z
+        .array(z.number().int().gte(1e14).lt(1e15))
+        .max(100000)
+        .optional()
+        .describe(
+          "Additional SIDs to treat as already-used (e.g. SIDs from a prior generate-sids call " +
+            "not yet written to source). Each value must be a valid C3 SID in [1e14, 1e15); max 100,000 entries.",
+        ),
+    },
+  },
+  // Takes the WRITE lock — not because source files change (they don't), but because
+  // (a) `checkRegistryFreshness` mutates module-level `extractedDirty` and `txId`, and
+  // (b) two concurrent generate-sids calls each building their own local `used` Set
+  // could mint identical SIDs (negligible probability ~1/9e14 per pair, but the
+  // architectural contract "SIDs don't collide with each other" should hold across
+  // concurrent callers). Serializing with `rwlock.write()` makes both rigorous.
+  // The NON_IDEMPOTENT_READ annotation describes the tool's effect on PROJECT state
+  // (none — source files unchanged); the write lock is internal-state safety.
+  async ({ count = 1, extraUsedSids }) =>
+    rwlock.write(async () => {
+      try {
+        const registryPath = path.join(EXTRACTED_DIR, "sid-registry.txt");
+        if (!fs.existsSync(registryPath)) {
+          return notFound("generate-sids", "sid-registry.txt not found. Run 'regenerate' first.");
+        }
+        checkRegistryFreshness(registryPath);
+        const used = readRegistryFile(registryPath);
+        if (extraUsedSids) for (const s of extraUsedSids) used.add(s);
+        const sids = Array.from({ length: count }, () => mintUniqueSid(used));
+        const header = `# Generated ${count} SID${count === 1 ? "" : "s"}:`;
+        const text = appendStaleWarning(`${header}\n${sids.join("\n")}`);
+        return { content: [{ type: "text", text }] };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { content: [{ type: "text", text: `generate-sids: ${msg}` }], isError: true };
+      }
+    })
+);
+
+server.registerTool(
   "list-include-tree",
   {
     title: "List Include Tree",
@@ -613,6 +713,10 @@ server.registerTool(
   },
   async ({ recipe: recipeJson }) =>
     rwlock.read(async () => {
+      // Refresh extractedDirty so the returned txId reflects any external edits
+      // the file watcher may have missed (atomic-rename, git checkout, network mounts).
+      // This matters: apply-recipe's optimistic-concurrency check uses our returned txId.
+      checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
       const lines: string[] = [];
       const log: Logger = (...args) => lines.push(args.map(String).join(" "));
       try {
@@ -667,6 +771,10 @@ server.registerTool(
   },
   async ({ recipe: recipeJson, txId: expectedTxId, regenerate }, extra: Extra) =>
     rwlock.write(async () => {
+      // Refresh extractedDirty before the txId check — catches external edits the
+      // file watcher may have missed, so a stale registry doesn't seed `mintUniqueSid`
+      // with SIDs that already exist on disk.
+      checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
       const shouldRegenerate = regenerate !== false;
       const totalSteps = shouldRegenerate ? 6 : 1; // apply + 5 generators
       const lines: string[] = [];
@@ -1015,9 +1123,15 @@ server.registerTool(
         const sourceContent = fs.readFileSync(sourceFullPath, "utf-8");
         const sourceLayout = JSON.parse(sourceContent) as Record<string, unknown>;
 
-        // Collect all existing UIDs and clone
+        // Collect all existing UIDs and SIDs, then clone. Seeding existingSids from the
+        // project registry prevents cloned SIDs from colliding with anything in eventSheets/,
+        // layouts/, or objectTypes/.
         const existingUids = collectAllUids(layoutsDir);
-        const cloned = cloneLayout(sourceLayout, { name, eventSheet, existingUids });
+        const sidRegistryPath = path.join(EXTRACTED_DIR, "sid-registry.txt");
+        const existingSids = fs.existsSync(sidRegistryPath)
+          ? readRegistryFile(sidRegistryPath)
+          : new Set<number>();
+        const cloned = cloneLayout(sourceLayout, { name, eventSheet, existingUids, existingSids });
 
         // Write output
         suppressWatcherDepth++;

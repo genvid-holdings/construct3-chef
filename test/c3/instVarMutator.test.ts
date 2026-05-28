@@ -1,24 +1,22 @@
-import { describe, it, beforeEach, afterEach } from "mocha";
+import { describe, it, beforeEach } from "mocha";
 import { assert } from "chai";
 import { addInstVarsToObjectType, addInstVarsToLayout, addInstVarsToTypesDts } from "../../src/c3/instVarMutator.js";
-import { initSidContextFromSet, resetSidContext } from "../../src/c3/sidUtils.js";
+import { freshSidGen, type SidGenerator } from "../../src/c3/sidUtils.js";
 
 // ─── addInstVarsToObjectType ───
 
 describe("addInstVarsToObjectType", () => {
+  let sidGen: SidGenerator;
   beforeEach(() => {
-    initSidContextFromSet(new Set());
+    sidGen = freshSidGen();
   });
 
-  afterEach(() => {
-    resetSidContext();
-  });
   it("adds new instance variables to objectType", () => {
     const objectType = {
       name: "MyObject",
       instanceVariables: [],
     };
-    const added = addInstVarsToObjectType(objectType, [
+    const added = addInstVarsToObjectType(sidGen, objectType, [
       { name: "count", type: "number" as const },
       { name: "label", type: "string" as const },
     ]);
@@ -36,7 +34,7 @@ describe("addInstVarsToObjectType", () => {
       name: "MyObject",
       instanceVariables: [{ name: "existing", type: "string", desc: "", show: true, sid: 12345 }],
     };
-    const added = addInstVarsToObjectType(objectType, [
+    const added = addInstVarsToObjectType(sidGen, objectType, [
       { name: "existing", type: "string" as const },
       { name: "newVar", type: "number" as const },
     ]);
@@ -51,7 +49,7 @@ describe("addInstVarsToObjectType", () => {
       name: "MyObject",
       instanceVariables: [{ name: "count", type: "number", desc: "", show: true, sid: 123 }],
     };
-    const added = addInstVarsToObjectType(objectType, [{ name: "count", type: "number" as const }]);
+    const added = addInstVarsToObjectType(sidGen, objectType, [{ name: "count", type: "number" as const }]);
     assert.deepEqual(added, []);
     assert.equal(objectType.instanceVariables.length, 1);
   });

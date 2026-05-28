@@ -1,8 +1,13 @@
-import { describe, it } from "mocha";
+import { describe, it, beforeEach } from "mocha";
 import { assert } from "chai";
 import type { EventSheet, BlockEvent, EventSheetVariable } from "c3source";
 import { diffScripts } from "../../src/c3/previewDiff.js";
 import { buildBlock, buildScriptAction } from "../../src/c3/eventSheetMutator.js";
+import { freshSidGen, type SidGenerator } from "../../src/c3/sidUtils.js";
+
+// Module-scope binding so the `makeBlockWithScript` helper below can close over it.
+// The `beforeEach` that reassigns it lives inside the describe (so the hook is scoped).
+let sidGen: SidGenerator;
 
 function makeSheet(events: EventSheet["events"]): EventSheet {
   return { name: "Test", events, sid: 1 };
@@ -13,10 +18,14 @@ function makeVariable(name: string, sid: number): EventSheetVariable {
 }
 
 function makeBlockWithScript(sid: number, scriptLines: string[]): BlockEvent {
-  return { ...buildBlock({ actions: [buildScriptAction({ script: scriptLines })] }), sid };
+  return { ...buildBlock(sidGen, { actions: [buildScriptAction({ script: scriptLines })] }), sid };
 }
 
 describe("previewDiff", () => {
+  beforeEach(() => {
+    sidGen = freshSidGen();
+  });
+
   describe("diffScripts", () => {
     it("detects script changes in matching events", () => {
       const orig = makeSheet([makeBlockWithScript(100, ["const x = 1;"])]);
@@ -81,7 +90,7 @@ describe("previewDiff", () => {
     it("handles nested children with SID-based pairing", () => {
       const childBlock = makeBlockWithScript(300, ["child script"]);
       const parentOrig: BlockEvent = {
-        ...buildBlock([], []),
+        ...buildBlock(sidGen),
         sid: 100,
         children: [childBlock],
       };
@@ -89,7 +98,7 @@ describe("previewDiff", () => {
 
       const childModified = makeBlockWithScript(300, ["child script modified"]);
       const parentMod: BlockEvent = {
-        ...buildBlock([], []),
+        ...buildBlock(sidGen),
         sid: 100,
         children: [childModified],
       };

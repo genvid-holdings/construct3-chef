@@ -489,16 +489,25 @@ function collectSids(value: unknown, location: string, entries: Array<{ sid: num
 /**
  * Determine the root location label for a file type.
  */
+/**
+ * The C3 source directories that contribute SIDs to the registry. Single source
+ * of truth for both `generateSidRegistry` and `checkRegistryFreshness` — adding
+ * a new SID-bearing dir (e.g. `families/`) here is a one-place change.
+ */
+export const SID_SOURCE_DIRS = ["eventSheets", "layouts", "objectTypes"] as const;
+
 function rootLocationForFile(relativePath: string): string {
   if (relativePath.startsWith("eventSheets/")) return "sheet";
   if (relativePath.startsWith("objectTypes/")) return "objectType";
+  if (relativePath.startsWith("layouts/")) return "layout";
   return "root";
 }
 
 /**
- * Recursively find all JSON files in a directory.
+ * Recursively find all JSON files in a directory. Returns [] if the directory
+ * does not exist. Exported so other tooling (e.g. staleness checks) can reuse it.
  */
-function findJsonFiles(dir: string): string[] {
+export function findJsonFiles(dir: string): string[] {
   const results: string[] = [];
   if (!existsSync(dir)) return results;
 
@@ -519,14 +528,11 @@ function findJsonFiles(dir: string): string[] {
 }
 
 export function generateSidRegistry(projectRoot: string, log: Logger = console.log): void {
-  const eventSheetsRoot = path.join(projectRoot, "eventSheets");
-  const objectTypesRoot = path.join(projectRoot, "objectTypes");
   const outDir = path.join(projectRoot, "extracted");
 
-  const allFiles = [
-    ...findJsonFiles(eventSheetsRoot),
-    ...findJsonFiles(objectTypesRoot),
-  ];
+  // Walk all SID-bearing source dirs (single source of truth: SID_SOURCE_DIRS).
+  // findJsonFiles returns [] for missing dirs so partial projects work.
+  const allFiles = SID_SOURCE_DIRS.flatMap((dir) => findJsonFiles(path.join(projectRoot, dir)));
 
   const allEntries: SidEntry[] = [];
 

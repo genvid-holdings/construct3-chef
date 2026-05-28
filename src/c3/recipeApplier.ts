@@ -32,12 +32,8 @@ import {
   renameLayer,
   type LayoutJson as MutatorLayoutJson,
 } from "./layoutMutator.js";
-import { collectAllUids, collectLayoutSids, generateUniqueSid } from "./layoutScaffold.js";
-import {
-  initSidContext,
-  resetSidContext,
-  generateUniqueSid as generateContextSid,
-} from "./sidUtils.js";
+import { collectAllUids, collectLayoutSids } from "./layoutScaffold.js";
+import { readRegistryFile, makeSidGen, type SidGenerator } from "./sidUtils.js";
 import { diffScripts } from "./previewDiff.js";
 import {
   addInstVarsToObjectType,
@@ -104,6 +100,7 @@ export function getObjectTypePath(objectType: ObjectTypeCreate): string {
 }
 
 export function createObjectType(
+  sidGen: SidGenerator,
   rootDir: string,
   objectType: ObjectTypeCreate,
   dryRun: boolean,
@@ -122,13 +119,13 @@ export function createObjectType(
     type: v.type,
     desc: "",
     show: true,
-    sid: generateContextSid(),
+    sid: sidGen(),
   }));
 
   const json = {
     name: objectType.name,
     "plugin-id": objectType.plugin,
-    sid: generateContextSid(),
+    sid: sidGen(),
     isGlobal: true,
     editorNewInstanceIsReplica: true,
     instanceVariables: ivars,
@@ -215,6 +212,7 @@ export function findObjectTypeFile(rootDir: string, typeName: string): string | 
 }
 
 export function processAddInstVars(
+  sidGen: SidGenerator,
   rootDir: string,
   entries: AddInstVarsEntry[],
   dryRun: boolean,
@@ -234,7 +232,7 @@ export function processAddInstVars(
     if (!objectType.instanceVariables) {
       objectType.instanceVariables = [];
     }
-    const added = addInstVarsToObjectType(objectType, newVars);
+    const added = addInstVarsToObjectType(sidGen, objectType, newVars);
     if (added.length === 0) {
       log(`  SKIP ${relOtPath} (all instVars already exist)`);
     } else if (dryRun) {
@@ -294,6 +292,7 @@ export function buildDefaultValue(type: "string" | "number" | "boolean"): string
 }
 
 export function applyNonworldInstance(
+  sidGen: SidGenerator,
   layout: LayoutJson,
   op: AddNonworldInstanceOp,
   uid: number,
@@ -324,7 +323,7 @@ export function applyNonworldInstance(
     type: op.type,
     properties: op.properties ?? defaultProps,
     uid,
-    sid: generateContextSid(),
+    sid: sidGen(),
     tags: op.tags ?? "",
     instanceVariables: resolvedIVars,
   };
@@ -410,7 +409,7 @@ function checkMoveVariableDemotions(
   log(`move-variable: demotion safety check passed for ${demotions.map((d) => `"${d.varName}"`).join(", ")}`);
 }
 
-export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOptions = {}) {
+export function applyRecipeInner(sidGen: SidGenerator, rootDir: string, recipe: Recipe, opts: ApplyOptions = {}) {
   const { dryRun = false, preview = false, regenerate = true, log = console.log } = opts;
   // Validate recipe structure
   const errors = validateRecipe(recipe);
@@ -452,7 +451,7 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
     if (recipe.objectTypes && recipe.objectTypes.length > 0) {
       log("objectTypes:");
       for (const ot of recipe.objectTypes) {
-        createObjectType(rootDir, ot, true, log);
+        createObjectType(sidGen, rootDir, ot, true, log);
         updateInstanceTypes(rootDir, ot, true, log);
         updateObjects(rootDir, ot, true, log);
       }
@@ -462,7 +461,7 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
     // addInstVars dry-run output
     if (recipe.addInstVars && recipe.addInstVars.length > 0) {
       log("addInstVars:");
-      processAddInstVars(rootDir, recipe.addInstVars, true, log);
+      processAddInstVars(sidGen, rootDir, recipe.addInstVars, true, log);
       log();
     }
 
@@ -562,7 +561,7 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
         }
         const original = loadSheet(rootDir, filePath);
         const clone = JSON.parse(JSON.stringify(original)) as EventSheet;
-        executeFileOps(clone, entry);
+        executeFileOps(sidGen, clone, entry);
 
         const diffs = diffScripts(filePath, original, clone);
         if (diffs.length === 0) {
@@ -584,7 +583,7 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
   if (recipe.objectTypes && recipe.objectTypes.length > 0) {
     log("\nobjectTypes:");
     for (const ot of recipe.objectTypes) {
-      const created = createObjectType(rootDir, ot, false, log);
+      const created = createObjectType(sidGen, rootDir, ot, false, log);
       if (created) {
         updateInstanceTypes(rootDir, ot, false, log);
         updateObjects(rootDir, ot, false, log);
@@ -595,7 +594,7 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
   // ─── Step 1b: Process addInstVars ───
   if (recipe.addInstVars && recipe.addInstVars.length > 0) {
     log("\naddInstVars:");
-    processAddInstVars(rootDir, recipe.addInstVars, false, log);
+    processAddInstVars(sidGen, rootDir, recipe.addInstVars, false, log);
   }
 
   // ─── Step 2: Process layouts ───
@@ -609,12 +608,11 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
     for (const [layoutPath, ops] of Object.entries(recipe.layouts)) {
       const fullPath = path.join(rootDir, layoutPath);
       const layout = JSON.parse(readFileSync(fullPath, "utf-8")) as LayoutJson;
-      const layoutSids = collectLayoutSids(layout as Record<string, unknown>);
 
       for (const op of ops) {
         switch (op.op) {
           case "add-nonworld-instance":
-            applyNonworldInstance(layout, op, uidCounter.next++, recipe.objectTypes ?? []);
+            applyNonworldInstance(sidGen, layout, op, uidCounter.next++, recipe.objectTypes ?? []);
             log(`  MODIFIED ${layoutPath} (+nonworld ${op.type} uid=${uidCounter.next - 1})`);
             break;
 
@@ -648,7 +646,7 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
               targetLayer: op.targetLayer,
               childrenLayer: op.childrenLayer,
               uidCounter,
-              sidGenerator: () => generateUniqueSid(layoutSids),
+              sidGenerator: sidGen,
               overrides: op.overrides,
               childOverrides: op.childOverrides,
             });
@@ -680,7 +678,7 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
               targetLayer: op.targetLayer,
               childrenLayer: op.childrenLayer,
               uidCounter,
-              sidGenerator: () => generateUniqueSid(layoutSids),
+              sidGenerator: sidGen,
               overrides: op.overrides,
               childOverrides: op.childOverrides,
               inheritOverrides: op.inheritOverrides,
@@ -706,7 +704,7 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
               targetLayer: op.targetLayer,
               childrenLayer: op.childrenLayer,
               uidCounter,
-              sidGenerator: () => generateUniqueSid(layoutSids),
+              sidGenerator: sidGen,
             });
             log(`  MODIFIED ${layoutPath} (move ${op.type} \u2192 "${op.targetLayer}")`);
             break;
@@ -727,7 +725,7 @@ export function applyRecipeInner(rootDir: string, recipe: Recipe, opts: ApplyOpt
   // ─── Step 3: Process files ───
   if (recipe.files && Object.keys(recipe.files).length > 0) {
     log("\nfiles:");
-    const result = executeRecipe({ files: recipe.files }, (filePath) => loadSheet(rootDir, filePath));
+    const result = executeRecipe(sidGen, { files: recipe.files }, (filePath) => loadSheet(rootDir, filePath));
 
     for (const [filePath, sheet] of result.modified) {
       const fullPath = path.join(rootDir, filePath);
@@ -755,13 +753,31 @@ export function applyParsed(rootDir: string, recipe: Recipe, opts: ApplyOptions 
   const resolved: ApplyOptions = { ...opts };
   if (resolved.preview) resolved.dryRun = true;
 
+  // Seed the SID generator from the full sid-registry.txt (eventSheets/ + layouts/ + objectTypes/).
+  // The closure mutates `used` as SIDs are minted, so every builder call in this recipe shares
+  // one cumulative used-SID Set — no init/reset lifecycle needed.
   const registryPath = path.join(rootDir, "extracted", "sid-registry.txt");
-  initSidContext(registryPath);
-  try {
-    applyRecipeInner(rootDir, recipe, resolved);
-  } finally {
-    resetSidContext();
+  const used = readRegistryFile(registryPath);
+
+  // Defence-in-depth against a stale registry: for every layout this recipe touches,
+  // union the on-disk SIDs into `used` so layout ops can't mint a SID already present
+  // in the file. The registry covers layouts/ but may lag behind a prior apply with
+  // `regenerate: false` or a watcher-missed external edit.
+  if (recipe.layouts) {
+    for (const layoutPath of Object.keys(recipe.layouts)) {
+      const fullPath = path.join(rootDir, layoutPath);
+      if (!existsSync(fullPath)) continue;
+      try {
+        const layoutJson = JSON.parse(readFileSync(fullPath, "utf-8")) as Record<string, unknown>;
+        for (const sid of collectLayoutSids(layoutJson)) used.add(sid);
+      } catch {
+        // Unparseable layout — skip the defensive seed; the recipe op will surface a real error.
+      }
+    }
   }
+
+  const sidGen = makeSidGen(used);
+  applyRecipeInner(sidGen, rootDir, recipe, resolved);
 }
 
 // ─── Rename symbols function ───

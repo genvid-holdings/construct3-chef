@@ -7,14 +7,7 @@ export * from "./c3/eventSheetMutator.js";
 export * from "./c3/projectSync.js";
 export * from "./c3/dslFormatter.js";
 export * from "./c3/includeTree.js";
-// layoutScaffold re-exports generateUniqueSid (stateless version); sidUtils exports the context-based version.
-// Export layoutScaffold items explicitly, excluding the name conflict.
-export {
-  collectLayoutUids,
-  collectAllUids,
-  collectLayoutSids,
-  cloneLayout,
-} from "./c3/layoutScaffold.js";
+export * from "./c3/layoutScaffold.js";
 export * from "./c3/layoutFormatter.js";
 export * from "./c3/layoutMutator.js";
 export * from "./c3/search.js";

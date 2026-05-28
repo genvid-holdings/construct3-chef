@@ -3,85 +3,16 @@ import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  generateUniqueSid,
   collectSids,
-  initSidContextFromSet,
-  initSidContext,
-  resetSidContext,
+  mintUniqueSid,
+  readRegistryFile,
+  freshSidGen,
 } from "../../src/c3/sidUtils.js";
 
 const MIN_SID = 1e14;
 const MAX_SID = 1e15;
 
 describe("sidUtils", () => {
-  beforeEach(() => {
-    resetSidContext();
-  });
-
-  describe("generateUniqueSid()", () => {
-    it("throws when context is null (not initialized)", () => {
-      assert.throws(() => generateUniqueSid(), /not initialized|initSidContext/i);
-    });
-
-    it("returns a value in [1e14, 1e15)", () => {
-      initSidContextFromSet(new Set());
-      const sid = generateUniqueSid();
-      assert.ok(sid >= MIN_SID, `sid ${sid} < 1e14`);
-      assert.ok(sid < MAX_SID, `sid ${sid} >= 1e15`);
-    });
-
-    it("never returns 0", () => {
-      initSidContextFromSet(new Set());
-      for (let i = 0; i < 20; i++) {
-        const sid = generateUniqueSid();
-        assert.notEqual(sid, 0);
-      }
-    });
-
-    it("returns unique values across N calls with empty initial set", () => {
-      initSidContextFromSet(new Set());
-      const sids = new Set<number>();
-      for (let i = 0; i < 50; i++) {
-        const sid = generateUniqueSid();
-        assert.ok(!sids.has(sid), `duplicate sid ${sid} at call ${i}`);
-        sids.add(sid);
-      }
-    });
-
-    it("avoids SIDs seeded via initSidContextFromSet", () => {
-      const seeded = new Set<number>([100000000000000, 100000000000001, 100000000000002]);
-      initSidContextFromSet(seeded);
-      for (let i = 0; i < 30; i++) {
-        const sid = generateUniqueSid();
-        assert.ok(!seeded.has(sid), `generated seeded SID ${sid}`);
-      }
-    });
-
-    it("throws after 100 attempts when forced collision", () => {
-      // Fill all possible SIDs in a tiny range, leaving only 1 slot open at the very high end
-      // Strategy: override Math.random to return values that always collide
-      // Better: use a near-full set covering almost all of [1e14, 1e15)
-      // We can't realistically fill 9e14 values, so instead we mock Math.random
-      const origRandom = Math.random;
-      let callCount = 0;
-      // Always return a value that maps to a taken SID
-      const takenSid = 100000000000000;
-      Math.random = () => {
-        callCount++;
-        // Always produce the same SID (takenSid)
-        // generateUniqueSid: floor(Math.random() * (MAX - MIN)) + MIN
-        // So we need (takenSid - MIN) / (MAX - MIN)
-        return (takenSid - MIN_SID) / (MAX_SID - MIN_SID);
-      };
-      try {
-        initSidContextFromSet(new Set([takenSid]));
-        assert.throws(() => generateUniqueSid(), /100 attempts|collision/i);
-      } finally {
-        Math.random = origRandom;
-      }
-    });
-  });
-
   describe("collectSids(json)", () => {
     it("returns empty Set for null input", () => {
       const result = collectSids(null);
@@ -159,84 +90,128 @@ describe("sidUtils", () => {
     });
   });
 
-  describe("initSidContextFromSet()", () => {
-    it("populates context so generateUniqueSid avoids those SIDs", () => {
-      const existing = new Set<number>([200000000000000, 200000000000001]);
-      initSidContextFromSet(existing);
-      for (let i = 0; i < 20; i++) {
-        const sid = generateUniqueSid();
-        assert.ok(!existing.has(sid));
+  describe("mintUniqueSid() — stateless", () => {
+    it("returns a value in [1e14, 1e15)", () => {
+      const used = new Set<number>();
+      const sid = mintUniqueSid(used);
+      assert.ok(sid >= MIN_SID && sid < MAX_SID, `sid ${sid} out of range`);
+    });
+
+    it("mutates the passed Set by adding the minted SID", () => {
+      const used = new Set<number>();
+      const sid = mintUniqueSid(used);
+      assert.ok(used.has(sid), "minted SID was not added to used set");
+      assert.equal(used.size, 1);
+    });
+
+    it("generates non-colliding SIDs across successive calls against the same Set", () => {
+      const used = new Set<number>();
+      const sids = new Set<number>();
+      for (let i = 0; i < 50; i++) sids.add(mintUniqueSid(used));
+      assert.equal(sids.size, 50, "duplicate SIDs minted within one Set");
+    });
+
+    it("avoids seeded SIDs", () => {
+      const seed = new Set<number>([100000000000001, 100000000000002]);
+      const used = new Set(seed);
+      for (let i = 0; i < 30; i++) {
+        const sid = mintUniqueSid(used);
+        assert.ok(!seed.has(sid), `minted a seeded SID: ${sid}`);
       }
     });
 
-    it("allows generating SIDs after initialization with empty set", () => {
-      initSidContextFromSet(new Set());
-      const sid = generateUniqueSid();
+    it("does NOT touch any module-level state — calling without prior init still works", () => {
+      const used = new Set<number>();
+      const sid = mintUniqueSid(used); // should NOT throw despite no prior setup
       assert.ok(sid >= MIN_SID && sid < MAX_SID);
     });
-  });
 
-  describe("resetSidContext()", () => {
-    it("nulls state so generateUniqueSid throws after reset", () => {
-      initSidContextFromSet(new Set());
-      generateUniqueSid(); // should not throw
-      resetSidContext();
-      assert.throws(() => generateUniqueSid(), /not initialized|initSidContext/i);
+    it("throws after 100 attempts when every draw collides", () => {
+      // Stub Math.random to always return the same value, then seed `used` with
+      // exactly the SID that value produces. mintUniqueSid will draw it 100 times,
+      // each time finding it in `used`, then throw.
+      const originalRandom = Math.random;
+      try {
+        Math.random = () => 0.5; // deterministic — always yields the same SID
+        const colliding = Math.floor(0.5 * (MAX_SID - MIN_SID)) + MIN_SID;
+        const used = new Set<number>([colliding]);
+        assert.throws(
+          () => mintUniqueSid(used),
+          /failed to find a unique SID after 100 attempts/,
+        );
+      } finally {
+        Math.random = originalRandom;
+      }
     });
   });
 
-  describe("initSidContext() with registry file", () => {
+  describe("readRegistryFile() — pure parser", () => {
     let tmpDir: string;
 
     beforeEach(() => {
-      tmpDir = mkdtempSync(path.join(os.tmpdir(), "sid-registry-test-"));
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "registry-parse-test-"));
     });
 
     afterEach(() => {
       rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it("reads registry file and parses SIDs from first column", () => {
+    it("returns a Set of SIDs from the first column, ignoring comments and blanks", () => {
       const registryPath = path.join(tmpDir, "sid-registry.txt");
-      const content = [
-        "# SID registry",
-        "300000000000001\teventSheets/Main.json\tevents[0]",
-        "300000000000002\teventSheets/Main.json\tevents[1]",
-        "",
-        "300000000000003\teventSheets/Other.json\tevents[0]",
-      ].join("\n");
-      writeFileSync(registryPath, content, "utf-8");
-
-      initSidContext(registryPath);
-
-      // The seeded SIDs should not be generated
-      for (let i = 0; i < 30; i++) {
-        const sid = generateUniqueSid();
-        assert.ok(
-          sid !== 300000000000001 && sid !== 300000000000002 && sid !== 300000000000003,
-          `generated a registry SID: ${sid}`,
-        );
-      }
-    });
-
-    it("ignores blank lines and comment lines", () => {
-      const registryPath = path.join(tmpDir, "sid-registry.txt");
-      // Only line 400000000000001 is valid
-      const content = ["# comment line", "", "   ", "400000000000001\tsomefile\tlocation", "# another comment"].join(
-        "\n",
+      writeFileSync(
+        registryPath,
+        [
+          "# header",
+          "500000000000001\tlayouts/Main.json\tlayer[0]",
+          "",
+          "500000000000002\tlayouts/Main.json\tinstance[0]",
+        ].join("\n"),
+        "utf-8",
       );
-      writeFileSync(registryPath, content, "utf-8");
-
-      initSidContext(registryPath);
-      // Should not throw — context is initialized
-      const sid = generateUniqueSid();
-      assert.ok(sid >= MIN_SID && sid < MAX_SID);
-      assert.notEqual(sid, 400000000000001);
+      const sids = readRegistryFile(registryPath);
+      assert.deepEqual([...sids].sort(), [500000000000001, 500000000000002]);
     });
 
-    it("throws if registry file does not exist", () => {
-      const missing = path.join(tmpDir, "nonexistent.txt");
-      assert.throws(() => initSidContext(missing), /SID registry not found/);
+    it("throws with the correct command name if registry is missing", () => {
+      // Guard against the legacy 'npm run generate-c3' message regression.
+      const missing = path.join(tmpDir, "nope.txt");
+      assert.throws(
+        () => readRegistryFile(missing),
+        /construct3-chef generate.*sid-registry/,
+      );
+    });
+  });
+
+  describe("freshSidGen()", () => {
+    it("returns a SID in [1e14, 1e15)", () => {
+      const sidGen = freshSidGen();
+      const sid = sidGen();
+      assert.ok(sid >= MIN_SID && sid < MAX_SID, `sid ${sid} out of range`);
+    });
+
+    it("back-to-back calls don't collide within one generator", () => {
+      const sidGen = freshSidGen();
+      const sids = new Set<number>();
+      for (let i = 0; i < 50; i++) sids.add(sidGen());
+      assert.equal(sids.size, 50, "duplicate SIDs minted by one freshSidGen");
+    });
+
+    it("two separate freshSidGen() instances are independent (no shared state)", () => {
+      // Two generators each minting 30 SIDs — between them, mathematically near-zero
+      // collision (range is 9e14), but the contract we're verifying is that they
+      // don't share a Set under the hood (which would force serialization).
+      const a = freshSidGen();
+      const b = freshSidGen();
+      const sidsA = new Set<number>();
+      const sidsB = new Set<number>();
+      for (let i = 0; i < 30; i++) sidsA.add(a());
+      for (let i = 0; i < 30; i++) sidsB.add(b());
+      assert.equal(sidsA.size, 30);
+      assert.equal(sidsB.size, 30);
+      // The generators are independent — generator B should not know about A's SIDs.
+      // We can't easily prove independence without inspecting internals, but verify
+      // they at least produce valid output and don't share a *visible* Set instance.
+      assert.notEqual(a, b);
     });
   });
 });

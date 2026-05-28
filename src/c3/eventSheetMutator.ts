@@ -12,7 +12,7 @@ import type {
   FunctionParameter,
   ScriptAction,
 } from "c3source";
-import { generateUniqueSid } from "./sidUtils.js";
+import type { SidGenerator } from "./sidUtils.js";
 
 export type { ScriptAction, IncludeEvent, CommentEvent } from "c3source";
 
@@ -318,7 +318,7 @@ function validateReplaceIndex(index: number, length: number, arrayName: string):
 
 // --- Builders ---
 
-export function buildBlock(opts?: {
+export function buildBlock(sidGen: SidGenerator, opts?: {
   conditions?: Condition[];
   actions?: C3Action[];
   children?: EventSheetEvent[];
@@ -328,7 +328,7 @@ export function buildBlock(opts?: {
     eventType: "block",
     conditions: opts?.conditions ?? [],
     actions: (opts?.actions ?? []) as (ScriptAction | Record<string, unknown>)[],
-    sid: generateUniqueSid(),
+    sid: sidGen(),
   };
   if (opts?.children) {
     block.children = opts.children;
@@ -339,7 +339,7 @@ export function buildBlock(opts?: {
   return block;
 }
 
-export function buildFunctionBlock(opts: {
+export function buildFunctionBlock(sidGen: SidGenerator, opts: {
   functionName: string;
   params?: Array<{ name: string; type: "string" | "number" | "boolean"; initialValue?: string }>;
   returnType?: string;
@@ -363,7 +363,7 @@ export function buildFunctionBlock(opts: {
       name: p.name,
       type: p.type,
       initialValue: p.initialValue ?? defaultInitialValue(p.type),
-      sid: generateUniqueSid(),
+      sid: sidGen(),
     };
   });
 
@@ -378,7 +378,7 @@ export function buildFunctionBlock(opts: {
     functionParameters,
     conditions: [],
     actions: (opts.actions ?? []) as (ScriptAction | Record<string, unknown>)[],
-    sid: generateUniqueSid(),
+    sid: sidGen(),
   };
   if (opts.children) {
     fb.children = opts.children;
@@ -386,7 +386,7 @@ export function buildFunctionBlock(opts: {
   return fb;
 }
 
-export function buildCustomAceBlock(opts: {
+export function buildCustomAceBlock(sidGen: SidGenerator, opts: {
   aceName: string;
   objectClass: string;
   aceType?: string;
@@ -412,7 +412,7 @@ export function buildCustomAceBlock(opts: {
       name: p.name,
       type: p.type,
       initialValue: p.initialValue ?? defaultInitialValue(p.type),
-      sid: generateUniqueSid(),
+      sid: sidGen(),
     };
   });
 
@@ -429,7 +429,7 @@ export function buildCustomAceBlock(opts: {
     functionParameters,
     conditions: [],
     actions: (opts.actions ?? []) as (ScriptAction | Record<string, unknown>)[],
-    sid: generateUniqueSid(),
+    sid: sidGen(),
   };
   if (opts.children) {
     cab.children = opts.children;
@@ -437,7 +437,7 @@ export function buildCustomAceBlock(opts: {
   return cab;
 }
 
-export function buildAction(opts: {
+export function buildAction(sidGen: SidGenerator, opts: {
   id: string;
   objectClass: string;
   parameters?: Record<string, string>;
@@ -446,7 +446,7 @@ export function buildAction(opts: {
   const action: StandardAction = {
     id: opts.id,
     objectClass: opts.objectClass,
-    sid: generateUniqueSid(),
+    sid: sidGen(),
   };
   if (opts.parameters) {
     action.parameters = opts.parameters;
@@ -457,13 +457,13 @@ export function buildAction(opts: {
   return action;
 }
 
-export function buildCallAction(opts: {
+export function buildCallAction(sidGen: SidGenerator, opts: {
   callFunction: string;
   parameters?: string[];
 }): FunctionCallAction {
   const action: FunctionCallAction = {
     callFunction: opts.callFunction,
-    sid: generateUniqueSid(),
+    sid: sidGen(),
   };
   if (opts.parameters) {
     action.parameters = opts.parameters;
@@ -485,7 +485,7 @@ export type VariableEvent = EventSheetVariable;
 
 // --- Builders (phase 2) ---
 
-export function buildVariable(opts: {
+export function buildVariable(sidGen: SidGenerator, opts: {
   name: string;
   type: "string" | "number" | "boolean";
   value?: string;
@@ -535,11 +535,11 @@ export function buildVariable(opts: {
     comment: "",
     isStatic: resolvedConstant ? true : resolvedStatic,
     isConstant: resolvedConstant,
-    sid: generateUniqueSid(),
+    sid: sidGen(),
   };
 }
 
-export function buildCondition(opts: {
+export function buildCondition(sidGen: SidGenerator, opts: {
   id: string;
   objectClass: string;
   parameters?: Record<string, string | number | boolean>;
@@ -549,7 +549,7 @@ export function buildCondition(opts: {
   const condition: Condition = {
     id: opts.id,
     objectClass: opts.objectClass,
-    sid: generateUniqueSid(),
+    sid: sidGen(),
   };
   if (opts.parameters) {
     condition.parameters = opts.parameters;
@@ -563,7 +563,7 @@ export function buildCondition(opts: {
   return condition;
 }
 
-export function buildGroup(opts: {
+export function buildGroup(sidGen: SidGenerator, opts: {
   title: string;
   children?: EventSheetEvent[];
   activeOnStart?: boolean;
@@ -576,7 +576,7 @@ export function buildGroup(opts: {
     description: "",
     isActiveOnStart: opts.activeOnStart ?? true,
     children: opts.children ?? [],
-    sid: generateUniqueSid(),
+    sid: sidGen(),
   };
 }
 
@@ -680,7 +680,7 @@ export function getActionIdentifier(action: C3Action): string | undefined {
   return undefined;
 }
 
-export function buildCustomAction(opts: {
+export function buildCustomAction(sidGen: SidGenerator, opts: {
   name: string;
   objectClass: string;
   parameters?: unknown[];
@@ -688,7 +688,7 @@ export function buildCustomAction(opts: {
   const action: CustomAction = {
     customAction: opts.name,
     objectClass: opts.objectClass,
-    sid: generateUniqueSid(),
+    sid: sidGen(),
   };
   if (opts.parameters) {
     action.parameters = opts.parameters;

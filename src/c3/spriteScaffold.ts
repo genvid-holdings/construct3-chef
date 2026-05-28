@@ -1,16 +1,11 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { mintUniqueSid } from "./sidUtils.js";
 
-// ─── SID generation ───
-
-function generateUniqueSid(existingSids: Set<number>): number {
-  let sid: number;
-  do {
-    sid = Math.floor(Math.random() * 1e15);
-  } while (existingSids.has(sid));
-  existingSids.add(sid);
-  return sid;
-}
+// SID generation lives in ./sidUtils.js — `mintUniqueSid(existingSids)` enforces the
+// strict [1e14, 1e15) range with a 100-attempt collision cap. The historical local
+// `generateUniqueSid` here had range [0, 1e15) (could return SID 0, documented as
+// unsafe in the initiative) and an unbounded retry loop.
 
 // ─── File utilities ───
 
@@ -198,7 +193,7 @@ export function cloneSprite(
 
   const sidMap = new Map<number, number>();
   for (const oldSid of sourceSids) {
-    sidMap.set(oldSid, generateUniqueSid(allExistingSids));
+    sidMap.set(oldSid, mintUniqueSid(allExistingSids));
   }
 
   // 3. Update name

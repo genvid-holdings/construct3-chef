@@ -1,16 +1,11 @@
 import { readFileSync } from "node:fs";
 import { find_all_layouts_path } from "c3source";
+import { mintUniqueSid } from "./sidUtils.js";
 
-// ─── SID generation ───
-
-export function generateUniqueSid(existingSids: Set<number>): number {
-  let sid: number;
-  do {
-    sid = Math.floor(Math.random() * 1e15);
-  } while (existingSids.has(sid));
-  existingSids.add(sid);
-  return sid;
-}
+// SID generation moved to ./sidUtils.js — use `mintUniqueSid(usedSids)` (strict range
+// [1e14, 1e15) with a 100-attempt collision cap). The historical `generateUniqueSid`
+// in this module had range [0, 1e15) (could return SID 0, documented as unsafe) and
+// an unbounded retry loop. See initiatives/c3-mcp-server/sid-singleton-removal-plan.md.
 
 // ─── UID collection ───
 
@@ -220,6 +215,14 @@ export function cloneLayout(
     eventSheet: string;
     /** All UIDs that already exist across ALL layouts (to avoid collision) */
     existingUids: Set<number>;
+    /**
+     * SIDs that already exist project-wide (eventSheets/, layouts/, objectTypes/) — typically
+     * seeded via `readRegistryFile(extracted/sid-registry.txt)`. The new SIDs minted for the
+     * clone will not collide with anything in this set. The Set is mutated as SIDs are minted.
+     * Optional for backward compatibility; when omitted, falls back to the legacy clone-local
+     * Set that only avoids collisions within the clone itself.
+     */
+    existingSids?: Set<number>;
   },
 ): Record<string, unknown> {
   // 1. Deep-copy source JSON
@@ -239,12 +242,16 @@ export function cloneLayout(
     uidMap.set(oldUid, nextUid++);
   }
 
-  // 3. Build SID remapping
+  // 3. Build SID remapping. Use the caller-provided existingSids when available so the
+  // clone's new SIDs don't collide with anything project-wide; otherwise fall back to a
+  // clone-local Set (legacy behaviour).
   const sourceSids = collectLayoutSids(source);
-  const generatedSids = new Set<number>();
+  const generatedSids = opts.existingSids ?? new Set<number>();
+  // Seed with source SIDs too so cloned SIDs don't collide with their own ancestors.
+  for (const sid of sourceSids) generatedSids.add(sid);
   const sidMap = new Map<number, number>();
   for (const oldSid of sourceSids) {
-    sidMap.set(oldSid, generateUniqueSid(generatedSids));
+    sidMap.set(oldSid, mintUniqueSid(generatedSids));
   }
 
   // 4. Apply remapping to the deep-copied layout

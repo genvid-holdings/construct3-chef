@@ -3,7 +3,7 @@
  * No file I/O — all operations are in-memory transformations.
  */
 
-import { generateUniqueSid } from "./sidUtils.js";
+import type { SidGenerator } from "./sidUtils.js";
 
 export interface InstVarDef {
   name: string;
@@ -31,6 +31,7 @@ interface ObjectTypeJson {
  * Skips variables that already exist (by name). Returns the names of added variables.
  */
 export function addInstVarsToObjectType(
+  sidGen: SidGenerator,
   objectType: ObjectTypeJson,
   newVars: InstVarDef[],
 ): string[] {
@@ -46,7 +47,7 @@ export function addInstVarsToObjectType(
       type: v.type,
       desc: "",
       show: true,
-      sid: generateUniqueSid(),
+      sid: sidGen(),
     });
     added.push(v.name);
   }

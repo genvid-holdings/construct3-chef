@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach } from "mocha";
+import { describe, it, beforeEach } from "mocha";
 import { assert } from "chai";
 import type {
   EventSheet,
@@ -56,15 +56,7 @@ import {
   validateActionParams,
   validateConditionParams,
 } from "../../src/c3/recipeInterpreter.js";
-import { initSidContextFromSet, resetSidContext } from "../../src/c3/sidUtils.js";
-
-beforeEach(() => {
-  initSidContextFromSet(new Set());
-});
-
-afterEach(() => {
-  resetSidContext();
-});
+import { freshSidGen, type SidGenerator } from "../../src/c3/sidUtils.js";
 
 function makeSheet(...events: EventSheetEvent[]): EventSheet {
   return { name: "TestSheet", events, sid: 0 };
@@ -78,11 +70,18 @@ function makeCondition(id: string): Condition {
   return { id, objectClass: "System", sid: 1 };
 }
 
-// ─── expandAction ───
+describe("recipeInterpreter", () => {
+  let sidGen: SidGenerator;
 
-describe("expandAction", () => {
+  beforeEach(() => {
+    sidGen = freshSidGen();
+  });
+
+  // ─── expandAction ───
+
+  describe("expandAction", () => {
   it("expands script shorthand", () => {
-    const result = expandAction({ script: ["const x = 1;"] });
+    const result = expandAction(sidGen, { script: ["const x = 1;"] });
     const script = result as ScriptAction;
     assert.equal(script.type, "script");
     assert.equal(script.language, "typescript");
@@ -90,7 +89,7 @@ describe("expandAction", () => {
   });
 
   it("expands call shorthand with params", () => {
-    const result = expandAction({ call: "playSFX", params: ['"click"'] });
+    const result = expandAction(sidGen, { call: "playSFX", params: ['"click"'] });
     const call = result as FunctionCallAction;
     assert.equal(call.callFunction, "playSFX");
     assert.deepStrictEqual(call.parameters, ['"click"']);
@@ -98,20 +97,20 @@ describe("expandAction", () => {
   });
 
   it("auto-stringifies numeric params in call shorthand", () => {
-    const result = expandAction({ call: "setLevel", params: [0, "hello", true] });
+    const result = expandAction(sidGen, { call: "setLevel", params: [0, "hello", true] });
     const call = result as FunctionCallAction;
     assert.deepStrictEqual(call.parameters, ["0", "hello", "true"]);
   });
 
   it("expands call shorthand without params", () => {
-    const result = expandAction({ call: "doStuff" });
+    const result = expandAction(sidGen, { call: "doStuff" });
     const call = result as FunctionCallAction;
     assert.equal(call.callFunction, "doStuff");
     assert.notProperty(call, "parameters");
   });
 
   it("expands custom-action shorthand", () => {
-    const result = expandAction({ "custom-action": "Initialize", object: "CardScroller" });
+    const result = expandAction(sidGen, { "custom-action": "Initialize", object: "CardScroller" });
     const custom = result as CustomAction;
     assert.equal(custom.customAction, "Initialize");
     assert.equal(custom.objectClass, "CardScroller");
@@ -119,14 +118,14 @@ describe("expandAction", () => {
   });
 
   it("expands comment shorthand", () => {
-    const result = expandAction({ comment: "setup values" });
+    const result = expandAction(sidGen, { comment: "setup values" });
     const comment = result as CommentAction;
     assert.equal(comment.type, "comment");
     assert.equal(comment.text, "setup values");
   });
 
   it("expands generic action with params", () => {
-    const result = expandAction({ id: "set-text", object: "Text", params: { text: "hi" } });
+    const result = expandAction(sidGen, { id: "set-text", object: "Text", params: { text: "hi" } });
     const action = result as StandardAction;
     assert.equal(action.id, "set-text");
     assert.equal(action.objectClass, "Text");
@@ -135,7 +134,7 @@ describe("expandAction", () => {
   });
 
   it("expands generic action with behavior", () => {
-    const result = expandAction({
+    const result = expandAction(sidGen, {
       id: "start-timer",
       object: "Boss",
       behavior: "Timer",
@@ -149,35 +148,35 @@ describe("expandAction", () => {
   });
 
   it("accepts objectClass as an alias for object", () => {
-    const action = expandAction({ id: "destroy", objectClass: "Foo" }) as StandardAction;
+    const action = expandAction(sidGen, { id: "destroy", objectClass: "Foo" }) as StandardAction;
     assert.equal(action.id, "destroy");
     assert.equal(action.objectClass, "Foo");
   });
 
   it("prefers object over objectClass when both are present", () => {
-    const action = expandAction({ id: "destroy", object: "Foo", objectClass: "Bar" }) as StandardAction;
+    const action = expandAction(sidGen, { id: "destroy", object: "Foo", objectClass: "Bar" }) as StandardAction;
     assert.equal(action.objectClass, "Foo");
   });
 
   it("auto-defaults objectClass to System for well-known System action ids", () => {
     for (const id of ["wait", "wait-for-previous-actions", "signal"]) {
-      const action = expandAction({ id }) as StandardAction;
+      const action = expandAction(sidGen, { id }) as StandardAction;
       assert.equal(action.objectClass, "System", `id=${id}`);
     }
   });
 
   it("throws when a non-System id action has no object/objectClass", () => {
-    assert.throws(() => expandAction({ id: "destroy" }), /missing its target object/);
+    assert.throws(() => expandAction(sidGen, { id: "destroy" }), /missing its target object/);
   });
 
   it("accepts objectClass as an alias on custom-action", () => {
-    const custom = expandAction({ "custom-action": "Initialize", objectClass: "CardScroller" }) as CustomAction;
+    const custom = expandAction(sidGen, { "custom-action": "Initialize", objectClass: "CardScroller" }) as CustomAction;
     assert.equal(custom.customAction, "Initialize");
     assert.equal(custom.objectClass, "CardScroller");
   });
 
   it("throws for unrecognized shorthand", () => {
-    assert.throws(() => expandAction({ foo: "bar" } as unknown as BuilderAction), /Unrecognized action shorthand/);
+    assert.throws(() => expandAction(sidGen, { foo: "bar" } as unknown as BuilderAction), /Unrecognized action shorthand/);
   });
 });
 
@@ -189,7 +188,7 @@ describe("action validation heuristic", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      expandAction({ id: "LoadTitleData", object: "Obj" });
+      expandAction(sidGen, { id: "LoadTitleData", object: "Obj" });
       assert.equal(warnings.length, 1);
       assert.match(warnings[0], /looks like a custom ACE name/);
       assert.match(warnings[0], /custom-action/);
@@ -203,7 +202,7 @@ describe("action validation heuristic", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      expandAction({ id: "set-text", object: "Obj" });
+      expandAction(sidGen, { id: "set-text", object: "Obj" });
       assert.equal(warnings.length, 0);
     } finally {
       console.warn = origWarn;
@@ -215,7 +214,7 @@ describe("action validation heuristic", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      expandAction({ "custom-action": "set-text", object: "Obj" });
+      expandAction(sidGen, { "custom-action": "set-text", object: "Obj" });
       assert.equal(warnings.length, 1);
       assert.match(warnings[0], /looks like a plugin action id/);
       assert.match(warnings[0], /"id"/);
@@ -229,7 +228,7 @@ describe("action validation heuristic", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      expandAction({ "custom-action": "LoadData", object: "Obj" });
+      expandAction(sidGen, { "custom-action": "LoadData", object: "Obj" });
       assert.equal(warnings.length, 0);
     } finally {
       console.warn = origWarn;
@@ -241,7 +240,7 @@ describe("action validation heuristic", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      expandAction({ id: "destroy", object: "Obj" });
+      expandAction(sidGen, { id: "destroy", object: "Obj" });
       assert.equal(warnings.length, 0);
     } finally {
       console.warn = origWarn;
@@ -253,20 +252,20 @@ describe("action validation heuristic", () => {
 
 describe("expandCondition", () => {
   it("expands else shorthand", () => {
-    const result = expandCondition({ else: true });
+    const result = expandCondition(sidGen, { else: true });
     assert.equal(result.id, "else");
     assert.equal(result.objectClass, "System");
     assert.notEqual(result.sid, 0);
   });
 
   it("expands trigger-once shorthand", () => {
-    const result = expandCondition({ "trigger-once": true });
+    const result = expandCondition(sidGen, { "trigger-once": true });
     assert.equal(result.id, "trigger-once-while-true");
     assert.equal(result.objectClass, "System");
   });
 
   it("expands generic condition", () => {
-    const result = expandCondition({
+    const result = expandCondition(sidGen, {
       id: "compare-two-values",
       object: "System",
       params: { first: "1", second: "2", comparison: 0 },
@@ -277,22 +276,22 @@ describe("expandCondition", () => {
   });
 
   it("expands inverted condition", () => {
-    const result = expandCondition({ id: "is-visible", object: "Sprite", inverted: true });
+    const result = expandCondition(sidGen, { id: "is-visible", object: "Sprite", inverted: true });
     assert.equal(result.isInverted, true);
   });
 
   it("accepts objectClass as an alias for object", () => {
-    const condition = expandCondition({ id: "is-visible", objectClass: "Sprite" });
+    const condition = expandCondition(sidGen, { id: "is-visible", objectClass: "Sprite" });
     assert.equal(condition.objectClass, "Sprite");
   });
 
   it("throws when a condition id has no object/objectClass", () => {
-    assert.throws(() => expandCondition({ id: "is-visible" }), /missing its target object/);
+    assert.throws(() => expandCondition(sidGen, { id: "is-visible" }), /missing its target object/);
   });
 
   it("throws for unrecognized shorthand", () => {
     assert.throws(
-      () => expandCondition({ foo: "bar" } as unknown as BuilderCondition),
+      () => expandCondition(sidGen, { foo: "bar" } as unknown as BuilderCondition),
       /Unrecognized condition shorthand/,
     );
   });
@@ -302,7 +301,7 @@ describe("expandCondition", () => {
 
 describe("expandEvent", () => {
   it("expands variable", () => {
-    const result = expandEvent({ variable: { name: "count", type: "number", value: "10" } });
+    const result = expandEvent(sidGen, { variable: { name: "count", type: "number", value: "10" } });
     assert.equal(result.eventType, "variable");
     const v = result as EventSheetEvent & { name: string; type: string; initialValue: string };
     assert.equal(v.name, "count");
@@ -311,7 +310,7 @@ describe("expandEvent", () => {
   });
 
   it("expands block with conditions and actions", () => {
-    const result = expandEvent({
+    const result = expandEvent(sidGen, {
       block: {
         conditions: [{ id: "on-start-of-layout", object: "System" }],
         actions: [{ id: "set-text", object: "Text", params: { text: "hello" } }],
@@ -326,7 +325,7 @@ describe("expandEvent", () => {
   });
 
   it("expands function-block", () => {
-    const result = expandEvent({
+    const result = expandEvent(sidGen, {
       "function-block": {
         name: "doWork",
         params: [{ name: "x", type: "number" }],
@@ -352,7 +351,7 @@ describe("expandEvent", () => {
   });
 
   it("expands custom-ace-block", () => {
-    const result = expandEvent({
+    const result = expandEvent(sidGen, {
       "custom-ace-block": {
         name: "SetupThumbnail",
         object: "VODStateJSON",
@@ -380,7 +379,7 @@ describe("expandEvent", () => {
   });
 
   it("expands custom-ace-block with defaults", () => {
-    const result = expandEvent({
+    const result = expandEvent(sidGen, {
       "custom-ace-block": {
         name: "DoSomething",
         object: "MyObject",
@@ -399,7 +398,7 @@ describe("expandEvent", () => {
   });
 
   it("expands group with children", () => {
-    const result = expandEvent({
+    const result = expandEvent(sidGen, {
       group: {
         title: "My Group",
         children: [{ comment: "inside group" }],
@@ -415,13 +414,13 @@ describe("expandEvent", () => {
   });
 
   it("expands comment event", () => {
-    const result = expandEvent({ comment: "A comment" });
+    const result = expandEvent(sidGen, { comment: "A comment" });
     assert.equal(result.eventType, "comment");
     assert.equal((result as { text: string }).text, "A comment");
   });
 
   it("throws for unrecognized shorthand", () => {
-    assert.throws(() => expandEvent({ foo: "bar" } as unknown as BuilderEvent), /Unrecognized event shorthand/);
+    assert.throws(() => expandEvent(sidGen, { foo: "bar" } as unknown as BuilderEvent), /Unrecognized event shorthand/);
   });
 });
 
@@ -430,7 +429,7 @@ describe("expandEvent", () => {
 describe("executeOp: insert-event", () => {
   it("inserts block at index", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }));
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-event",
       path: "",
       index: 0,
@@ -442,7 +441,7 @@ describe("executeOp: insert-event", () => {
 
   it("inserts function-block at end with -1", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }));
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-event",
       index: -1,
       "function-block": { name: "myFunc" },
@@ -454,7 +453,7 @@ describe("executeOp: insert-event", () => {
 
   it("inserts variable with inline shorthand", () => {
     const sheet = makeSheet();
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-event",
       index: 0,
       variable: { name: "x", type: "number" },
@@ -465,7 +464,7 @@ describe("executeOp: insert-event", () => {
 
   it("inserts custom-ace-block with inline shorthand", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }));
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-event",
       index: -1,
       "custom-ace-block": {
@@ -489,7 +488,7 @@ describe("executeOp: insert-event", () => {
 describe("executeOp: insert-variables", () => {
   it("inserts batch variables after position", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }));
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-variables",
       path: "",
       after: 0,
@@ -508,7 +507,7 @@ describe("executeOp: insert-variables", () => {
 
   it("prepends variables with after: -1", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }));
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-variables",
       after: -1,
       variables: [
@@ -524,7 +523,7 @@ describe("executeOp: insert-variables", () => {
 
   it("accepts { variable: {...} } wrapper format (consistent with insert-event)", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }));
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-variables",
       path: "",
       after: -1,
@@ -542,10 +541,10 @@ describe("executeOp: insert-variables", () => {
 
 describe("executeOp: insert-actions", () => {
   it("inserts batch actions after position", () => {
-    const existingAction = buildAction({ id: "existing", objectClass: "Obj" });
+    const existingAction = buildAction(sidGen, { id: "existing", objectClass: "Obj" });
     const block = makeBlock({ actions: [existingAction] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-actions",
       path: "events[0]",
       after: 0,
@@ -564,7 +563,7 @@ describe("executeOp: insert-actions", () => {
     const block1 = makeBlock({ sid: 1 });
     const block2 = makeBlock({ sid: 2 });
     const sheet = makeSheet(block1, block2);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-actions",
       paths: ["events[0]", "events[1]"],
       after: -1,
@@ -581,7 +580,7 @@ describe("executeOp: insert-conditions", () => {
   it("inserts batch conditions after position", () => {
     const block = makeBlock({ conditions: [makeCondition("existing")] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-conditions",
       path: "events[0]",
       after: 0,
@@ -600,7 +599,7 @@ describe("executeOp: insert-conditions", () => {
     const block1 = makeBlock({ sid: 1 });
     const block2 = makeBlock({ sid: 2 });
     const sheet = makeSheet(block1, block2);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "insert-conditions",
       paths: ["events[0]", "events[1]"],
       after: -1,
@@ -615,9 +614,9 @@ describe("executeOp: insert-conditions", () => {
 
 describe("executeOp: replace-action", () => {
   it("replaces action at index", () => {
-    const block = makeBlock({ actions: [buildAction({ id: "old", objectClass: "X" })] });
+    const block = makeBlock({ actions: [buildAction(sidGen, { id: "old", objectClass: "X" })] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "replace-action",
       path: "events[0]",
       index: 0,
@@ -628,10 +627,10 @@ describe("executeOp: replace-action", () => {
   });
 
   it("replaces action at multiple paths", () => {
-    const block1 = makeBlock({ actions: [buildAction({ id: "old", objectClass: "X" })] });
-    const block2 = makeBlock({ actions: [buildAction({ id: "old", objectClass: "X" })] });
+    const block1 = makeBlock({ actions: [buildAction(sidGen, { id: "old", objectClass: "X" })] });
+    const block2 = makeBlock({ actions: [buildAction(sidGen, { id: "old", objectClass: "X" })] });
     const sheet = makeSheet(block1, block2);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "replace-action",
       paths: ["events[0]", "events[1]"],
       index: 0,
@@ -648,7 +647,7 @@ describe("executeOp: replace-condition", () => {
   it("replaces condition at index", () => {
     const block = makeBlock({ conditions: [makeCondition("old")] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "replace-condition",
       path: "events[0]",
       index: 0,
@@ -663,7 +662,7 @@ describe("executeOp: replace-condition", () => {
 describe("executeOp: replace-event", () => {
   it("replaces event at index", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }), makeBlock({ sid: 2 }));
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "replace-event",
       index: 0,
       comment: "replaced",
@@ -680,7 +679,7 @@ describe("executeOp: replace-event", () => {
 describe("executeOp: remove-event", () => {
   it("removes event at index", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }), makeBlock({ sid: 2 }));
-    executeOp(sheet, { op: "remove-event", index: 0 });
+    executeOp(sidGen, sheet, { op: "remove-event", index: 0 });
     assert.equal(sheet.events.length, 1);
     assert.equal(sheet.events[0].sid, 2);
   });
@@ -690,14 +689,14 @@ describe("executeOp: remove-event", () => {
     const child2 = makeBlock({ sid: 20 });
     const parent = makeBlock({ sid: 1, children: [child1, child2] });
     const sheet = makeSheet(parent);
-    executeFileOps(sheet, [{ op: "remove-event", path: "events[0].children[0]" }]);
+    executeFileOps(sidGen, sheet, [{ op: "remove-event", path: "events[0].children[0]" }]);
     assert.equal((sheet.events[0] as BlockEvent).children!.length, 1);
     assert.equal((sheet.events[0] as BlockEvent).children![0].sid, 20);
   });
 
   it("removes root event using full node path (no index)", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }), makeBlock({ sid: 2 }), makeBlock({ sid: 3 }));
-    executeFileOps(sheet, [{ op: "remove-event", path: "events[1]" }]);
+    executeFileOps(sidGen, sheet, [{ op: "remove-event", path: "events[1]" }]);
     assert.equal(sheet.events.length, 2);
     assert.equal(sheet.events[0].sid, 1);
     assert.equal(sheet.events[1].sid, 3);
@@ -706,11 +705,11 @@ describe("executeOp: remove-event", () => {
 
 describe("executeOp: remove-action", () => {
   it("removes action at index", () => {
-    const action1 = buildAction({ id: "first", objectClass: "A" });
-    const action2 = buildAction({ id: "second", objectClass: "B" });
+    const action1 = buildAction(sidGen, { id: "first", objectClass: "A" });
+    const action2 = buildAction(sidGen, { id: "second", objectClass: "B" });
     const block = makeBlock({ actions: [action1, action2] });
     const sheet = makeSheet(block);
-    executeOp(sheet, { op: "remove-action", path: "events[0]", index: 0 });
+    executeOp(sidGen, sheet, { op: "remove-action", path: "events[0]", index: 0 });
     assert.equal(block.actions.length, 1);
     assert.equal((block.actions[0] as StandardAction).id, "second");
   });
@@ -720,7 +719,7 @@ describe("executeOp: remove-condition", () => {
   it("removes condition at index", () => {
     const block = makeBlock({ conditions: [makeCondition("first"), makeCondition("second")] });
     const sheet = makeSheet(block);
-    executeOp(sheet, { op: "remove-condition", path: "events[0]", index: 0 });
+    executeOp(sidGen, sheet, { op: "remove-condition", path: "events[0]", index: 0 });
     assert.equal(block.conditions.length, 1);
     assert.equal(block.conditions[0].id, "second");
   });
@@ -731,7 +730,7 @@ describe("executeOp: remove-condition", () => {
 describe("executeOp: add-include", () => {
   it("adds include at top of events", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }));
-    executeOp(sheet, { op: "add-include", include: "OtherSheet" });
+    executeOp(sidGen, sheet, { op: "add-include", include: "OtherSheet" });
     assert.equal(sheet.events.length, 2);
     assert.equal(sheet.events[0].eventType, "include");
     assert.equal((sheet.events[0] as { includeSheet: string }).includeSheet, "OtherSheet");
@@ -739,7 +738,7 @@ describe("executeOp: add-include", () => {
 
   it("inserts after named include when 'after' is specified", () => {
     const sheet = makeSheet(buildInclude("CommonEvents"), buildInclude("NavbarEvents"), makeBlock({ sid: 1 }));
-    executeOp(sheet, { op: "add-include", include: "NewSheet", after: "CommonEvents" });
+    executeOp(sidGen, sheet, { op: "add-include", include: "NewSheet", after: "CommonEvents" });
     assert.equal(sheet.events.length, 4);
     assert.equal((sheet.events[0] as { includeSheet: string }).includeSheet, "CommonEvents");
     assert.equal((sheet.events[1] as { includeSheet: string }).includeSheet, "NewSheet");
@@ -748,7 +747,7 @@ describe("executeOp: add-include", () => {
 
   it("inserts after last include when 'after' targets the last one", () => {
     const sheet = makeSheet(buildInclude("CommonEvents"), buildInclude("NavbarEvents"), makeBlock({ sid: 1 }));
-    executeOp(sheet, { op: "add-include", include: "NewSheet", after: "NavbarEvents" });
+    executeOp(sidGen, sheet, { op: "add-include", include: "NewSheet", after: "NavbarEvents" });
     assert.equal(sheet.events.length, 4);
     assert.equal((sheet.events[2] as { includeSheet: string }).includeSheet, "NewSheet");
     assert.equal(sheet.events[3].eventType, "block");
@@ -757,7 +756,7 @@ describe("executeOp: add-include", () => {
   it("throws when 'after' include is not found", () => {
     const sheet = makeSheet(buildInclude("CommonEvents"), makeBlock({ sid: 1 }));
     assert.throws(
-      () => executeOp(sheet, { op: "add-include", include: "NewSheet", after: "NonExistent" }),
+      () => executeOp(sidGen, sheet, { op: "add-include", include: "NewSheet", after: "NonExistent" }),
       /could not find include "NonExistent"/,
     );
   });
@@ -770,7 +769,7 @@ describe("executeOp: patch-script", () => {
     const scriptAction = buildScriptAction({ script: ["const x = 1;", "console.log(x);"] });
     const block = makeBlock({ actions: [scriptAction] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-script",
       path: "events[0]",
       actionIndex: 0,
@@ -785,7 +784,7 @@ describe("executeOp: patch-script", () => {
     const scriptAction = buildScriptAction({ script: ["const x = getVal();", "use(x);"] });
     const block = makeBlock({ actions: [scriptAction] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-script",
       path: "events[0]",
       actionIndex: 0,
@@ -802,7 +801,7 @@ describe("executeOp: patch-script", () => {
     const block1 = makeBlock({ actions: [script1] });
     const block2 = makeBlock({ actions: [script2] });
     const sheet = makeSheet(block1, block2);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-script",
       paths: ["events[0]", "events[1]"],
       actionIndex: 0,
@@ -819,7 +818,7 @@ describe("executeOp: patch-script", () => {
     const sheet = makeSheet(block);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-script",
           path: "events[0]",
           actionIndex: 0,
@@ -834,7 +833,7 @@ describe("executeOp: patch-script", () => {
     const scriptAction = buildScriptAction({ script: ["const a = 1;", "const b = 1;", "const c = 1;"] });
     const block = makeBlock({ actions: [scriptAction] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-script",
       path: "events[0]",
       actionIndex: 0,
@@ -852,7 +851,7 @@ describe("executeOp: patch-script", () => {
     const sheet = makeSheet(block);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-script",
           path: "events[0]",
           actionIndex: 0,
@@ -868,7 +867,7 @@ describe("executeOp: patch-script", () => {
     const scriptAction = buildScriptAction({ script: ["log(1);", "log(1);"] });
     const block = makeBlock({ actions: [scriptAction] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-script",
       path: "events[0]",
       actionIndex: 0,
@@ -885,7 +884,7 @@ describe("executeOp: patch-script", () => {
     const script2 = buildScriptAction({ script: ["processData();"] });
     const block = makeBlock({ actions: [commentAction, script1, script2] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-script",
       path: "events[0]",
       matchScript: "processData",
@@ -903,7 +902,7 @@ describe("executeOp: patch-script", () => {
     const sheet = makeSheet(block);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-script",
           path: "events[0]",
           matchScript: "nonexistent",
@@ -921,7 +920,7 @@ describe("executeOp: patch-script", () => {
     const sheet = makeSheet(block);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-script",
           path: "events[0]",
           matchScript: "doWork",
@@ -938,7 +937,7 @@ describe("executeOp: patch-script", () => {
     const block1 = makeBlock({ actions: [script1] });
     const block2 = makeBlock({ actions: [script2] });
     const sheet = makeSheet(block1, block2);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-script",
       paths: ["events[0]", "events[1]"],
       matchScript: "uniqueCall",
@@ -956,7 +955,7 @@ describe("executeOp: set-or-block", () => {
   it("sets isOrBlock on block", () => {
     const block = makeBlock();
     const sheet = makeSheet(block);
-    executeOp(sheet, { op: "set-or-block", path: "events[0]" });
+    executeOp(sidGen, sheet, { op: "set-or-block", path: "events[0]" });
     assert.equal((block as BlockEvent & { isOrBlock: boolean }).isOrBlock, true);
   });
 });
@@ -974,7 +973,7 @@ describe("executeOp: set-disabled", () => {
       sid: 1,
     };
     const sheet = makeSheet(group);
-    executeOp(sheet, { op: "set-disabled", path: "events[0]", disabled: true });
+    executeOp(sidGen, sheet, { op: "set-disabled", path: "events[0]", disabled: true });
     assert.equal(group.disabled, true);
   });
 });
@@ -984,7 +983,7 @@ describe("executeOp: set-disabled", () => {
 describe("executeFileOps", () => {
   it("executes multiple ops sequentially", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }));
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       {
         op: "insert-event",
         index: 0,
@@ -1006,7 +1005,7 @@ describe("executeFileOps", () => {
   it("removes events correctly when given in descending index order", () => {
     const sheet = makeSheet(makeBlock({ sid: 1 }), makeBlock({ sid: 2 }), makeBlock({ sid: 3 }));
     // Remove indices 2 and 0 in descending order — no index shifting issues
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       { op: "remove-event", index: 2 },
       { op: "remove-event", index: 0 },
     ]);
@@ -1023,7 +1022,7 @@ describe("executeFileOps", () => {
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
       // Ascending order — will emit a warning (index 0 < index 1)
-      executeFileOps(sheet, [
+      executeFileOps(sidGen, sheet, [
         { op: "remove-event", index: 0 },
         { op: "remove-event", index: 1 },
       ]);
@@ -1037,7 +1036,7 @@ describe("executeFileOps", () => {
   it("removes events and patches script when given ops in safe order", () => {
     const script = buildScriptAction({ script: ["const x = 1;"] });
     const sheet = makeSheet(makeBlock({ sid: 1 }), makeBlock({ sid: 2 }), makeBlock({ sid: 3, actions: [script] }));
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       { op: "remove-event", index: 1 },
       { op: "remove-event", index: 0 },
       {
@@ -1064,7 +1063,7 @@ describe("executeFileOps", () => {
     const topBlock = makeBlock({ sid: 2 });
     const sheet = makeSheet(outer, topBlock);
     // Remove from nested path first (ascending), then from root — different containers, no sort
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       { op: "remove-event", path: "events[0]", index: 0 },
       { op: "remove-event", path: "", index: 1 },
     ]);
@@ -1080,7 +1079,7 @@ describe("executeFileOps", () => {
 
 describe("createSheet", () => {
   it("creates sheet from builder events", () => {
-    const sheet = createSheet("MySheet", [
+    const sheet = createSheet(sidGen, "MySheet", [
       { variable: { name: "x", type: "number" } },
       { block: { actions: [{ comment: "hello" }] } },
     ]);
@@ -1102,7 +1101,7 @@ describe("executeRecipe", () => {
         "eventSheets/Test.json": [{ op: "insert-event", index: -1, comment: "appended" }],
       },
     };
-    const result = executeRecipe(recipe, () => existingSheet);
+    const result = executeRecipe(sidGen, recipe, () => existingSheet);
     assert.equal(result.modified.size, 1);
     assert.equal(result.created.size, 0);
     const modified = result.modified.get("eventSheets/Test.json")!;
@@ -1119,7 +1118,7 @@ describe("executeRecipe", () => {
         },
       },
     };
-    const result = executeRecipe(recipe, () => {
+    const result = executeRecipe(sidGen, recipe, () => {
       throw new Error("should not load");
     });
     assert.equal(result.created.size, 1);
@@ -1140,7 +1139,7 @@ describe("executeRecipe", () => {
         },
       },
     };
-    const result = executeRecipe(recipe, () => existingSheet);
+    const result = executeRecipe(sidGen, recipe, () => existingSheet);
     assert.equal(result.modified.size, 1);
     assert.equal(result.created.size, 1);
     assert.isTrue(result.modified.has("eventSheets/Existing.json"));
@@ -1298,7 +1297,7 @@ describe("walkScriptActions", () => {
 
   it("finds script actions in function-blocks", () => {
     const script = buildScriptAction({ script: ["return 1;"] });
-    const fb = buildFunctionBlock({
+    const fb = buildFunctionBlock(sidGen, {
       functionName: "myFunc",
       actions: [script],
     });
@@ -1308,7 +1307,7 @@ describe("walkScriptActions", () => {
   });
 
   it("skips non-script actions", () => {
-    const action = buildAction({ id: "set-text", objectClass: "Text" });
+    const action = buildAction(sidGen, { id: "set-text", objectClass: "Text" });
     const script = buildScriptAction({ script: ["code();"] });
     const block = makeBlock({ actions: [action, script] });
     const sheet = makeSheet(block);
@@ -1351,7 +1350,7 @@ describe("executeOp: rename-symbol", () => {
     const script = buildScriptAction({ script: ["OldModule.foo();", "const x = OldModule.bar;"] });
     const block = makeBlock({ actions: [script] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "rename-symbol",
       replacements: [
         { from: "OldModule.foo(", to: "newNs.foo(" },
@@ -1368,7 +1367,7 @@ describe("executeOp: rename-symbol", () => {
     });
     const block = makeBlock({ actions: [script] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "rename-symbol",
       replacements: [
         // Intentionally put shorter one first — implementation should sort
@@ -1384,11 +1383,11 @@ describe("executeOp: rename-symbol", () => {
   });
 
   it("skips non-script actions (standard, call, comment)", () => {
-    const stdAction = buildAction({ id: "set-text", objectClass: "OldModule", parameters: { text: "OldModule.foo" } });
+    const stdAction = buildAction(sidGen, { id: "set-text", objectClass: "OldModule", parameters: { text: "OldModule.foo" } });
     const script = buildScriptAction({ script: ["OldModule.foo();"] });
     const block = makeBlock({ actions: [stdAction, script] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "rename-symbol",
       replacements: [{ from: "OldModule.foo(", to: "newNs.foo(" }],
     });
@@ -1401,13 +1400,13 @@ describe("executeOp: rename-symbol", () => {
 
   it("skips functionDescription metadata", () => {
     const script = buildScriptAction({ script: ["OldModule.foo();"] });
-    const fb = buildFunctionBlock({
+    const fb = buildFunctionBlock(sidGen, {
       functionName: "myFunc",
       description: "Uses OldModule.foo to do things",
       actions: [script],
     });
     const sheet = makeSheet(fb);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "rename-symbol",
       replacements: [{ from: "OldModule.foo(", to: "newNs.foo(" }],
     });
@@ -1431,7 +1430,7 @@ describe("executeOp: rename-symbol", () => {
       sid: 1,
     };
     const sheet = makeSheet(group);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "rename-symbol",
       replacements: [{ from: "Mod.", to: "ns." }],
     });
@@ -1447,7 +1446,7 @@ describe("executeOp: rename-symbol", () => {
     const sheet = makeSheet(block);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "rename-symbol",
           replacements: [{ from: "nonexistent", to: "replacement" }],
         }),
@@ -1469,7 +1468,7 @@ describe("executeOp: rename-symbol", () => {
         ],
       },
     };
-    const result = executeRecipe(recipe, () => existingSheet);
+    const result = executeRecipe(sidGen, recipe, () => existingSheet);
     const modified = result.modified.get("eventSheets/Test.json")!;
     const modBlock = modified.events[0] as BlockEvent;
     assert.deepStrictEqual((modBlock.actions[0] as ScriptAction).script, ["New.call();"]);
@@ -1656,7 +1655,7 @@ describe("stale path warnings", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      executeFileOps(sheet, ops);
+      executeFileOps(sidGen, sheet, ops);
     } finally {
       console.warn = origWarn;
     }
@@ -1682,7 +1681,7 @@ describe("stale path warnings", () => {
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
       // The patch will fail because events[4] no longer exists after remove, but warning should still fire
-      assert.throws(() => executeFileOps(sheet, ops));
+      assert.throws(() => executeFileOps(sidGen, sheet, ops));
     } finally {
       console.warn = origWarn;
     }
@@ -1714,7 +1713,7 @@ describe("stale path warnings", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      executeFileOps(sheet, ops);
+      executeFileOps(sidGen, sheet, ops);
     } finally {
       console.warn = origWarn;
     }
@@ -1736,7 +1735,7 @@ describe("stale path warnings", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      executeFileOps(sheet, ops);
+      executeFileOps(sidGen, sheet, ops);
     } finally {
       console.warn = origWarn;
     }
@@ -1758,7 +1757,7 @@ describe("stale path warnings", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      executeFileOps(sheet, ops);
+      executeFileOps(sidGen, sheet, ops);
     } finally {
       console.warn = origWarn;
     }
@@ -1774,7 +1773,7 @@ describe("stale path warnings", () => {
 describe("SID-based addressing", () => {
   it("remove-event with in: 'sid:X' removes the correct event", () => {
     const sheet = makeSheet(makeBlock({ sid: 100 }), makeBlock({ sid: 200 }), makeBlock({ sid: 300 }));
-    executeFileOps(sheet, [{ op: "remove-event", in: "sid:200" }]);
+    executeFileOps(sidGen, sheet, [{ op: "remove-event", in: "sid:200" }]);
     assert.equal(sheet.events.length, 2);
     assert.equal(sheet.events[0].sid, 100);
     assert.equal(sheet.events[1].sid, 300);
@@ -1788,7 +1787,7 @@ describe("SID-based addressing", () => {
       makeBlock({ sid: 400 }),
       makeBlock({ sid: 500 }),
     );
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       { op: "remove-event", in: "sid:200" },
       { op: "remove-event", in: "sid:400" },
       { op: "remove-event", in: "sid:500" },
@@ -1801,7 +1800,7 @@ describe("SID-based addressing", () => {
   it("insert-actions with in: 'sid:X' inserts into the correct event", () => {
     const block = makeBlock({ sid: 500 });
     const sheet = makeSheet(block);
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       { op: "insert-actions", in: "sid:500", after: -1, actions: [{ script: ["const x = 1;"] }] },
     ]);
     assert.equal(block.actions.length, 1);
@@ -1810,7 +1809,7 @@ describe("SID-based addressing", () => {
 
   it("$symbol allows referencing a newly-inserted event", () => {
     const sheet = makeSheet();
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       { op: "insert-event", id: "$newBlock", index: 0, block: { conditions: [], actions: [] } },
       { op: "insert-actions", in: "$newBlock", after: -1, actions: [{ script: ["const y = 2;"] }] },
     ]);
@@ -1822,7 +1821,7 @@ describe("SID-based addressing", () => {
 
   it("after: 'sid:X' on insert-event inserts after the referenced event", () => {
     const sheet = makeSheet(makeBlock({ sid: 10 }), makeBlock({ sid: 20 }), makeBlock({ sid: 30 }));
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       { op: "insert-event", after: "sid:20", block: { conditions: [], actions: [{ script: ["// inserted"] }] } },
     ]);
     assert.equal(sheet.events.length, 4);
@@ -1838,7 +1837,7 @@ describe("SID-based addressing", () => {
     const child3 = makeBlock({ sid: 300 });
     const container = makeBlock({ sid: 10, children: [child1, child2, child3] });
     const sheet = makeSheet(container);
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       {
         op: "insert-event",
         in: "sid:10",
@@ -1862,7 +1861,7 @@ describe("SID-based addressing", () => {
     const sheet = makeSheet(container, outsider);
     assert.throws(
       () =>
-        executeFileOps(sheet, [
+        executeFileOps(sidGen, sheet, [
           { op: "insert-event", in: "sid:10", after: "sid:999", block: { conditions: [], actions: [] } },
         ]),
       /not found in container/,
@@ -1874,7 +1873,7 @@ describe("SID-based addressing", () => {
     const child2 = makeBlock({ sid: 200 });
     const container = makeBlock({ sid: 10, children: [child1, child2] });
     const sheet = makeSheet(container);
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       { op: "insert-event", in: "sid:10", after: 0, block: { conditions: [], actions: [{ script: ["// after-0"] }] } },
     ]);
     const children = (sheet.events[0] as BlockEvent).children as BlockEvent[];
@@ -1890,7 +1889,7 @@ describe("SID-based addressing", () => {
     const origWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
-      executeFileOps(sheet, [], { autoAdjust: true });
+      executeFileOps(sidGen, sheet, [], { autoAdjust: true });
     } finally {
       console.warn = origWarn;
     }
@@ -1905,7 +1904,7 @@ describe("SID-based addressing", () => {
     console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
     try {
       // Use indices 0 and 1 (ascending) to trigger warning without an out-of-bounds error
-      executeFileOps(sheet, [
+      executeFileOps(sidGen, sheet, [
         { op: "remove-event", index: 0 },
         { op: "remove-event", index: 1 },
       ]);
@@ -1921,14 +1920,14 @@ describe("SID-based addressing", () => {
 
 describe("executeOp: patch-action-param", () => {
   it("patches a single param on a StandardAction by actionIndex", () => {
-    const action = buildAction({
+    const action = buildAction(sidGen, {
       id: "create-object",
       objectClass: "System",
       parameters: { "object-to-create": "Hero", "template-name": "" },
     });
     const block = makeBlock({ actions: [action] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-action-param",
       path: "events[0]",
       actionIndex: 0,
@@ -1941,14 +1940,14 @@ describe("executeOp: patch-action-param", () => {
   });
 
   it("patches multiple params with params object", () => {
-    const action = buildAction({
+    const action = buildAction(sidGen, {
       id: "create-object",
       objectClass: "System",
       parameters: { "object-to-create": "Hero", "template-name": "", "create-hierarchy": "false" },
     });
     const block = makeBlock({ actions: [action] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-action-param",
       path: "events[0]",
       actionIndex: 0,
@@ -1962,14 +1961,14 @@ describe("executeOp: patch-action-param", () => {
 
   it("finds action by matchAction on StandardAction id", () => {
     const commentAction = { type: "comment", text: "setup" } as unknown as StandardAction;
-    const action = buildAction({
+    const action = buildAction(sidGen, {
       id: "create-object",
       objectClass: "System",
       parameters: { "template-name": "" },
     });
     const block = makeBlock({ actions: [commentAction, action] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-action-param",
       path: "events[0]",
       matchAction: "create-object",
@@ -1988,7 +1987,7 @@ describe("executeOp: patch-action-param", () => {
     };
     const block = makeBlock({ actions: [callAction as unknown as StandardAction] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-action-param",
       path: "events[0]",
       matchAction: "DoSetup",
@@ -2000,12 +1999,12 @@ describe("executeOp: patch-action-param", () => {
   });
 
   it("works with multiple paths", () => {
-    const action1 = buildAction({
+    const action1 = buildAction(sidGen, {
       id: "set-text",
       objectClass: "Text",
       parameters: { text: '"old"' },
     });
-    const action2 = buildAction({
+    const action2 = buildAction(sidGen, {
       id: "set-text",
       objectClass: "Text",
       parameters: { text: '"old"' },
@@ -2013,7 +2012,7 @@ describe("executeOp: patch-action-param", () => {
     const block1 = makeBlock({ actions: [action1] });
     const block2 = makeBlock({ actions: [action2] });
     const sheet = makeSheet(block1, block2);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-action-param",
       paths: ["events[0]", "events[1]"],
       actionIndex: 0,
@@ -2030,7 +2029,7 @@ describe("executeOp: patch-action-param", () => {
     const sheet = makeSheet(block);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-action-param",
           path: "events[0]",
           actionIndex: 0,
@@ -2047,7 +2046,7 @@ describe("executeOp: patch-action-param", () => {
     const sheet = makeSheet(block);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-action-param",
           path: "events[0]",
           actionIndex: 0,
@@ -2059,12 +2058,12 @@ describe("executeOp: patch-action-param", () => {
   });
 
   it("throws when matchAction matches zero actions", () => {
-    const action = buildAction({ id: "set-text", objectClass: "Text" });
+    const action = buildAction(sidGen, { id: "set-text", objectClass: "Text" });
     const block = makeBlock({ actions: [action] });
     const sheet = makeSheet(block);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-action-param",
           path: "events[0]",
           matchAction: "nonexistent",
@@ -2076,13 +2075,13 @@ describe("executeOp: patch-action-param", () => {
   });
 
   it("throws when matchAction matches multiple actions", () => {
-    const action1 = buildAction({ id: "set-text", objectClass: "Text" });
-    const action2 = buildAction({ id: "set-text", objectClass: "Text" });
+    const action1 = buildAction(sidGen, { id: "set-text", objectClass: "Text" });
+    const action2 = buildAction(sidGen, { id: "set-text", objectClass: "Text" });
     const block = makeBlock({ actions: [action1, action2] });
     const sheet = makeSheet(block);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-action-param",
           path: "events[0]",
           matchAction: "set-text",
@@ -2103,7 +2102,7 @@ describe("executeOp: patch-action-param", () => {
     };
     const block = makeBlock({ actions: [action] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-action-param",
       path: "events[0]",
       actionIndex: 0,
@@ -2117,11 +2116,11 @@ describe("executeOp: patch-action-param", () => {
   });
 
   it("creates parameters object if missing on StandardAction", () => {
-    const action = buildAction({ id: "do-something", objectClass: "System" });
+    const action = buildAction(sidGen, { id: "do-something", objectClass: "System" });
     // buildAction doesn't set parameters when not provided
     const block = makeBlock({ actions: [action] });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-action-param",
       path: "events[0]",
       actionIndex: 0,
@@ -2561,7 +2560,7 @@ describe("executeOp: patch-function-block", () => {
       actions: [],
       sid: 111,
     } as FunctionBlockEvent);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-function-block",
       path: "events[0]",
       addParam: { name: "p1", type: "string" },
@@ -2588,7 +2587,7 @@ describe("executeOp: patch-function-block", () => {
       actions: [],
       sid: 222,
     } as FunctionBlockEvent);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-function-block",
       path: "events[0]",
       addParam: { name: "count", type: "number", initialValue: "42" },
@@ -2614,7 +2613,7 @@ describe("executeOp: patch-function-block", () => {
       actions: [],
       sid: 333,
     } as FunctionBlockEvent);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-function-block",
       path: "events[0]",
       removeParam: "remove",
@@ -2628,7 +2627,7 @@ describe("executeOp: patch-function-block", () => {
     const sheet = makeSheet(makeBlock({ sid: 444 }));
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-function-block",
           path: "events[0]",
           addParam: { name: "p", type: "string" },
@@ -2653,7 +2652,7 @@ describe("executeOp: patch-function-block", () => {
     } as FunctionBlockEvent);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-function-block",
           path: "events[0]",
           removeParam: "missing",
@@ -2678,7 +2677,7 @@ describe("executeOp: patch-function-block", () => {
     } as FunctionBlockEvent);
     assert.throws(
       () =>
-        executeOp(sheet, {
+        executeOp(sidGen, sheet, {
           op: "patch-function-block",
           path: "events[0]",
           addParam: { name: "existing", type: "number" },
@@ -2703,6 +2702,7 @@ describe("executeOp: patch-function-block", () => {
     } as FunctionBlockEvent);
     const sidIndex = buildSidIndex(sheet);
     executeOp(
+      sidGen,
       sheet,
       {
         op: "patch-function-block",
@@ -2734,7 +2734,7 @@ describe("executeOp: patch-function-block", () => {
       actions: [],
       sid: 777,
     } as CustomAceBlockEvent);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "patch-function-block",
       path: "events[0]",
       addParam: { name: "new", type: "boolean" },
@@ -3362,10 +3362,10 @@ describe("executeOp: replace-action regression", () => {
   it("R1.1: path-based call-to-call replaces params completely", () => {
     const block = makeBlock({
       sid: 100,
-      actions: [buildCallAction({ callFunction: "oldFunc", parameters: ["oldArg1", "oldArg2"] })],
+      actions: [buildCallAction(sidGen, { callFunction: "oldFunc", parameters: ["oldArg1", "oldArg2"] })],
     });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "replace-action",
       path: "events[0]",
       index: 0,
@@ -3379,10 +3379,10 @@ describe("executeOp: replace-action regression", () => {
   it("R1.2: path-based call-to-script changes action type", () => {
     const block = makeBlock({
       sid: 100,
-      actions: [buildCallAction({ callFunction: "oldFunc", parameters: ["arg"] })],
+      actions: [buildCallAction(sidGen, { callFunction: "oldFunc", parameters: ["arg"] })],
     });
     const sheet = makeSheet(block);
-    executeOp(sheet, {
+    executeOp(sidGen, sheet, {
       op: "replace-action",
       path: "events[0]",
       index: 0,
@@ -3397,10 +3397,10 @@ describe("executeOp: replace-action regression", () => {
   it("R1.3: SID-based call-to-call replaces params completely", () => {
     const block = makeBlock({
       sid: 200,
-      actions: [buildCallAction({ callFunction: "oldFunc", parameters: ["oldArg"] })],
+      actions: [buildCallAction(sidGen, { callFunction: "oldFunc", parameters: ["oldArg"] })],
     });
     const sheet = makeSheet(block);
-    executeFileOps(sheet, [{
+    executeFileOps(sidGen, sheet, [{
       op: "replace-action",
       in: "sid:200",
       index: 0,
@@ -3414,10 +3414,10 @@ describe("executeOp: replace-action regression", () => {
   it("R1.4: SID-based call-to-script changes action type", () => {
     const block = makeBlock({
       sid: 300,
-      actions: [buildCallAction({ callFunction: "oldFunc", parameters: ["arg"] })],
+      actions: [buildCallAction(sidGen, { callFunction: "oldFunc", parameters: ["arg"] })],
     });
     const sheet = makeSheet(block);
-    executeFileOps(sheet, [{
+    executeFileOps(sidGen, sheet, [{
       op: "replace-action",
       in: "sid:300",
       index: 0,
@@ -3477,7 +3477,7 @@ describe("executeOp: wrap-in-group", () => {
     const b2 = makeBlock({ sid: 20 });
     const b3 = makeBlock({ sid: 30 });
     const sheet = makeSheet(b1, b2, b3);
-    executeFileOps(sheet, [{
+    executeFileOps(sidGen, sheet, [{
       op: "wrap-in-group",
       events: ["sid:10", "sid:20"],
       title: "Wrapped Group",
@@ -3497,7 +3497,7 @@ describe("executeOp: wrap-in-group", () => {
     const b2 = makeBlock({ sid: 20 });
     const b3 = makeBlock({ sid: 30 });
     const sheet = makeSheet(b1, b2, b3);
-    executeFileOps(sheet, [{
+    executeFileOps(sidGen, sheet, [{
       op: "wrap-in-group",
       events: ["sid:20", "sid:30"],
       title: "Later Group",
@@ -3513,7 +3513,7 @@ describe("executeOp: wrap-in-group", () => {
     const b1 = makeBlock({ sid: 10 });
     const b2 = makeBlock({ sid: 20 });
     const sheet = makeSheet(b1, b2);
-    executeFileOps(sheet, [{
+    executeFileOps(sidGen, sheet, [{
       op: "wrap-in-group",
       events: ["sid:10", "sid:20"],
       title: "SID Group",
@@ -3530,7 +3530,7 @@ describe("executeOp: wrap-in-group", () => {
     const b3 = makeBlock({ sid: 40 });
     const b4 = makeBlock({ sid: 50 });
     const sheet = makeSheet(b0, b1, b2, b3, b4);
-    executeFileOps(sheet, [{
+    executeFileOps(sidGen, sheet, [{
       op: "wrap-in-group",
       events: ["sid:10", "sid:30", "sid:50"],
       title: "Non-contiguous",
@@ -3550,7 +3550,7 @@ describe("executeOp: wrap-in-group", () => {
     const b1 = makeBlock({ sid: 10 });
     const b2 = makeBlock({ sid: 20 });
     const sheet = makeSheet(b1, b2);
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       {
         op: "wrap-in-group",
         events: ["sid:10", "sid:20"],
@@ -3570,11 +3570,11 @@ describe("executeOp: wrap-in-group", () => {
 
   it("R2.6: throws when events span different parents", () => {
     const child = makeBlock({ sid: 20 });
-    const parent = buildGroup({ title: "G", children: [child] });
+    const parent = buildGroup(sidGen, { title: "G", children: [child] });
     const root = makeBlock({ sid: 10 });
     const sheet = makeSheet(root, parent);
     assert.throws(
-      () => executeFileOps(sheet, [{
+      () => executeFileOps(sidGen, sheet, [{
         op: "wrap-in-group",
         events: ["sid:10", "sid:20"],
         title: "Bad",
@@ -3586,7 +3586,7 @@ describe("executeOp: wrap-in-group", () => {
   it("R2.7: throws when event SID not found", () => {
     const sheet = makeSheet(makeBlock({ sid: 10 }));
     assert.throws(
-      () => executeFileOps(sheet, [{
+      () => executeFileOps(sidGen, sheet, [{
         op: "wrap-in-group",
         events: ["sid:999"],
         title: "Missing",
@@ -3598,7 +3598,7 @@ describe("executeOp: wrap-in-group", () => {
   it("R2.8: throws on empty events array", () => {
     const sheet = makeSheet(makeBlock({ sid: 10 }));
     assert.throws(
-      () => executeFileOps(sheet, [{
+      () => executeFileOps(sidGen, sheet, [{
         op: "wrap-in-group",
         events: [],
         title: "Empty",
@@ -3611,7 +3611,7 @@ describe("executeOp: wrap-in-group", () => {
     const b1 = makeBlock({ sid: 10 });
     const b2 = makeBlock({ sid: 20 });
     const sheet = makeSheet(b1, b2);
-    executeFileOps(sheet, [{
+    executeFileOps(sidGen, sheet, [{
       op: "wrap-in-group",
       events: ["sid:10"],
       title: "Solo",
@@ -3625,9 +3625,9 @@ describe("executeOp: wrap-in-group", () => {
   it("R2.10: 'in' field targets non-root container", () => {
     const child1 = makeBlock({ sid: 10 });
     const child2 = makeBlock({ sid: 20 });
-    const parent = buildGroup({ title: "Parent", children: [child1, child2] });
+    const parent = buildGroup(sidGen, { title: "Parent", children: [child1, child2] });
     const sheet = makeSheet(parent);
-    executeFileOps(sheet, [{
+    executeFileOps(sidGen, sheet, [{
       op: "wrap-in-group",
       in: `sid:${parent.sid}`,
       events: ["sid:10", "sid:20"],
@@ -3652,7 +3652,7 @@ describe("executeOp: wrap-in-group", () => {
     const b1 = makeBlock({ sid: 10 });
     const b2 = makeBlock({ sid: 20 });
     const sheet = makeSheet(b1, b2);
-    executeFileOps(sheet, [{
+    executeFileOps(sidGen, sheet, [{
       op: "wrap-in-group",
       events: ["sid:10", "sid:10", "sid:10"],
       title: "Dedup",
@@ -3701,7 +3701,7 @@ describe("executeOp: move-variable", () => {
     const v = makeVariable({ sid: 100, name: "score" });
     const group = makeGroup({ sid: 5, children: [v, makeBlock({ sid: 20 })] });
     const sheet = makeSheet(group);
-    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
+    executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
     assert.equal(sheet.events.length, 2); // variable + group
     assert.equal(sheet.events[0].sid, 100);
     assert.equal((sheet.events[0] as EventSheetVariable).name, "score");
@@ -3715,7 +3715,7 @@ describe("executeOp: move-variable", () => {
     const block = makeBlock({ sid: 20, actions: [script] });
     const group = makeGroup({ sid: 5, children: [v, block] });
     const sheet = makeSheet(group);
-    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
+    executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
     assert.deepEqual(script.script, ["runtime.globalVars.score = runtime.globalVars.score + 1;"]);
   });
 
@@ -3725,7 +3725,7 @@ describe("executeOp: move-variable", () => {
     const block = makeBlock({ sid: 20, actions: [script] });
     const group = makeGroup({ sid: 5, children: [v, block] });
     const sheet = makeSheet(group);
-    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
+    executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
     assert.deepEqual(script.script, ["runtime.globalVars.score = localVars.scoreMultiplier;"]);
   });
 
@@ -3733,7 +3733,7 @@ describe("executeOp: move-variable", () => {
     const v = makeVariable({ sid: 100, name: "score", isStatic: false });
     const group = makeGroup({ sid: 5, children: [v] });
     const sheet = makeSheet(group);
-    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
+    executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]);
     assert.isTrue((sheet.events[0] as EventSheetVariable).isStatic);
   });
 
@@ -3742,7 +3742,7 @@ describe("executeOp: move-variable", () => {
     const block = makeBlock({ sid: 20 });
     const group = makeGroup({ sid: 5, children: [block] });
     const sheet = makeSheet(v, group);
-    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]);
+    executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]);
     assert.equal(sheet.events.length, 1); // only the group remains at root
     assert.equal(group.children!.length, 2);
     assert.equal(group.children![0].sid, 100); // variable inserted at index 0
@@ -3755,7 +3755,7 @@ describe("executeOp: move-variable", () => {
     const block = makeBlock({ sid: 20, actions: [script] });
     const group = makeGroup({ sid: 5, children: [block] });
     const sheet = makeSheet(v, group);
-    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]);
+    executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]);
     assert.deepEqual(script.script, ["localVars.score += 1;"]);
   });
 
@@ -3763,7 +3763,7 @@ describe("executeOp: move-variable", () => {
     const v = makeVariable({ sid: 100, name: "score", isStatic: false });
     const group = makeGroup({ sid: 5, children: [makeBlock({ sid: 20 })] });
     const sheet = makeSheet(v, group);
-    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]);
+    executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]);
     assert.isTrue((group.children![0] as EventSheetVariable).isStatic);
   });
 
@@ -3771,7 +3771,7 @@ describe("executeOp: move-variable", () => {
     const v = makeVariable({ sid: 123456789, name: "score" });
     const group = makeGroup({ sid: 5, children: [v] });
     const sheet = makeSheet(group);
-    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:123456789", to: "root" }]);
+    executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:123456789", to: "root" }]);
     assert.equal(sheet.events[0].sid, 123456789);
   });
 
@@ -3779,7 +3779,7 @@ describe("executeOp: move-variable", () => {
     const v = makeVariable({ sid: 100, name: "score" });
     const group = makeGroup({ sid: 5, children: [makeBlock({ sid: 20 }), makeBlock({ sid: 30 })] });
     const sheet = makeSheet(v, group);
-    executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5", index: 1 }]);
+    executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5", index: 1 }]);
     assert.equal(group.children!.length, 3);
     assert.equal(group.children![0].sid, 20);
     assert.equal(group.children![1].sid, 100);
@@ -3790,7 +3790,7 @@ describe("executeOp: move-variable", () => {
     const v = makeVariable({ sid: 100, name: "score" });
     const group = makeGroup({ sid: 5, children: [makeBlock({ sid: 20 })] });
     const sheet = makeSheet(v, group);
-    executeFileOps(sheet, [
+    executeFileOps(sidGen, sheet, [
       { op: "move-variable", variable: "sid:100", to: "sid:5", id: "$v" }, // demote into group
       { op: "move-variable", variable: "$v", to: "root" }, // promote back via symbol
     ]);
@@ -3802,7 +3802,7 @@ describe("executeOp: move-variable", () => {
     const block = makeBlock({ sid: 10 });
     const sheet = makeSheet(block);
     assert.throws(
-      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:10", to: "root" }]),
+      () => executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:10", to: "root" }]),
       /not a variable/,
     );
   });
@@ -3811,7 +3811,7 @@ describe("executeOp: move-variable", () => {
     const v = makeVariable({ sid: 100, name: "score" });
     const sheet = makeSheet(v);
     assert.throws(
-      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]),
+      () => executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "root" }]),
       /already global/,
     );
   });
@@ -3821,7 +3821,7 @@ describe("executeOp: move-variable", () => {
     const group = makeGroup({ sid: 5, children: [v] });
     const sheet = makeSheet(group);
     assert.throws(
-      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]),
+      () => executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]),
       /already local/,
     );
   });
@@ -3831,7 +3831,7 @@ describe("executeOp: move-variable", () => {
     const other = makeVariable({ sid: 200, name: "other" });
     const sheet = makeSheet(v, other);
     assert.throws(
-      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:200" }]),
+      () => executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:200" }]),
       /not a container/,
     );
   });
@@ -3842,7 +3842,7 @@ describe("executeOp: move-variable", () => {
     const group = makeGroup({ sid: 5, children: [dup] });
     const sheet = makeSheet(v, group);
     assert.throws(
-      () => executeFileOps(sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]),
+      () => executeFileOps(sidGen, sheet, [{ op: "move-variable", variable: "sid:100", to: "sid:5" }]),
       /already declares a variable named "score"/,
     );
   });
@@ -3855,4 +3855,5 @@ describe("executeOp: move-variable", () => {
     assert.include(schema.optional, "index");
     assert.include(schema.optional, "id");
   });
+});
 });

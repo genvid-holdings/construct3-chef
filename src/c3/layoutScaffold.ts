@@ -5,7 +5,7 @@ import { mintUniqueSid } from "./sidUtils.js";
 // SID generation moved to ./sidUtils.js — use `mintUniqueSid(usedSids)` (strict range
 // [1e14, 1e15) with a 100-attempt collision cap). The historical `generateUniqueSid`
 // in this module had range [0, 1e15) (could return SID 0, documented as unsafe) and
-// an unbounded retry loop. See initiatives/c3-mcp-server/sid-singleton-removal-plan.md.
+// an unbounded retry loop; it was removed when the SID singleton was retired.
 
 // ─── UID collection ───
 

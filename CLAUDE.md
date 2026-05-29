@@ -8,8 +8,10 @@ construct3-chef mutates Construct 3 projects, which store their data as JSON fil
 
 ## Where to read more
 
-- **`initiatives/c3-mcp-server/initiative.md`** — the living roadmap and knowledge base for this tool: architecture rationale, design decisions (SID addressing, `txId`/`extractedDirty` concurrency, watcher suppression), the catalogued **recipe gaps and bugs** (read this before touching the recipe interpreter/validator), and future work. It was imported from the monorepo where this code was first developed; its repository note maps old `bin/…` paths onto this repo's `src/…`. Historical session plans are under `initiatives/c3-mcp-server/archive/`.
+- **`docs/mcp-architecture.md`** — MCP server design rationale (stdio transport, file-based-first, the `txId`/`extractedDirty`/watcher concurrency model, the `Logger` and `ReadWriteLock` decisions), the concurrency/security posture, the C3 Editor SDK capabilities research, and the prior-art comparison. The durable knowledge base, distilled from the (retired) c3-mcp-server initiative.
+- **`docs/recipe-reference.md`** — all event-sheet + layout + workflow recipe ops, SID addressing, builder shorthands, and the numbered **recipe gotchas and bugs** (read this before touching the recipe interpreter/validator).
 - **`docs/c3/`** — C3 *platform* reference (event sheet & layout JSON structure, scripting API, the async/concurrency model). Explains *why* the recipe gotchas exist. Distinct from `docs/recipe-reference.md`, `docs/generators.md`, `docs/cli.md`, which document this tool's own usage.
+- **`initiatives/`** — forward-looking roadmaps for unshipped work: [`c3-live-editor-integration`](initiatives/c3-live-editor-integration/initiative.md) (Playwright automation, addon bridge), [`mcp-tooling-followups`](initiatives/mcp-tooling-followups/initiative.md) (user-defined ops, `search-docs`, global-layer extraction, open read-tool gaps), and [`extracted-on-demand`](initiatives/extracted-on-demand/initiative.md). The completed c3-mcp-server initiative (its session plans and per-feature design docs) lives in git history: `git log -- initiatives/c3-mcp-server`.
 
 ## Commands
 

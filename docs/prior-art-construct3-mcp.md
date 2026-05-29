@@ -1,6 +1,6 @@
 # construct3-mcp: Architecture Deep Dive
 
-> _Imported from the monorepo where construct3-chef was first developed; see the [initiative repository note](initiative.md) for how `bin/c3/`→`src/c3/`, `bin/mcp/`→`src/mcp/`, shared utils → `genvid-mcp-utils`, and domain tooling → `domain-manager`. Reference/design record._
+> _Imported from the monorepo where construct3-chef was first developed. Path mapping: `bin/c3/`→`src/c3/`, `bin/mcp/`→`src/mcp/`, shared MCP utils → `genvid-mcp-utils`, domain tooling → `domain-manager`. Reference/design record; the digestible summary is in [mcp-architecture.md § Prior art](mcp-architecture.md#prior-art-liauw-mediaconstruct3-mcp)._
 
 Analysis of [liauw-media/construct3-mcp](https://github.com/liauw-media/construct3-mcp) for comparison with Burbank's C3 tooling.
 

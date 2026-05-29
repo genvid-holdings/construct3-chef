@@ -13,4 +13,4 @@ These notes were adapted from a production C3 project; project-specific (game) c
 
 ## Why this lives here
 
-construct3-chef operates directly on C3 project JSON. Understanding *why* the tool behaves as it does — why SIDs matter, why string-expression parameters need escaped quotes, why script actions race within a block — requires knowing the platform. These docs are that knowledge base; the recipe gotchas and bugs catalogued in [the initiative](../../initiatives/c3-mcp-server/initiative.md) are downstream consequences of the mechanics described here.
+construct3-chef operates directly on C3 project JSON. Understanding *why* the tool behaves as it does — why SIDs matter, why string-expression parameters need escaped quotes, why script actions race within a block — requires knowing the platform. These docs are that knowledge base; the recipe gotchas and bugs catalogued in [recipe-reference.md](../recipe-reference.md) are downstream consequences of the mechanics described here. For the tool's own architecture and design rationale, see [mcp-architecture.md](../mcp-architecture.md).

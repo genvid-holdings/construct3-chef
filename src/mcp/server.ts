@@ -379,7 +379,9 @@ server.registerTool(
       grep: z
         .string()
         .optional()
-        .describe("Regex pattern to filter entries by description (case-insensitive)."),
+        .describe(
+          "Regex pattern (case-insensitive). Matches against the description column AND a serialized summary of each event's own conditions and actions — including object classes, action/condition IDs, parameter values, [behaviorType] segments, [DISABLED] markers, and NOT prefixes — so queries like 'BattleLayout', 'GoToLayout', 'on-touched-object', or '[DISABLED]' find the relevant blocks. Search is shallow per-event: a match in a nested child returns the child's SID, not the enclosing block's.",
+        ),
     },
   },
   async ({ sheet, grep }) =>
@@ -393,7 +395,7 @@ server.registerTool(
       let entries = buildShallowSidMap(parsed);
       if (grep) {
         const re = new RegExp(grep, "i");
-        entries = entries.filter((e) => re.test(e.description));
+        entries = entries.filter((e) => re.test(e.description) || re.test(e.searchText));
       }
       if (entries.length === 0) {
         const hint = grep ? ` matching '${grep}'` : "";

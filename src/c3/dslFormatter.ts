@@ -528,8 +528,14 @@ export interface SidMapEntry {
   jsonPath: string;
   /** SID of the event. Undefined for include and comment events. */
   sid: number | undefined;
-  /** Short description (same format as DslIndexEntry.description). */
+  /** Short description (same format as DslIndexEntry.description). Display field. */
   description: string;
+  /**
+   * Concatenated summary of the event's own conditions and actions, intended for grep
+   * filtering — never displayed. Empty for event types without conditions/actions
+   * (`variable`, `include`, `comment`, `group`).
+   */
+  searchText: string;
 }
 
 /**
@@ -539,6 +545,33 @@ export interface SidMapEntry {
  */
 export function buildShallowSidMap(sheet: EventSheet): SidMapEntry[] {
   const entries: SidMapEntry[] = [];
+  // Shared counter incremented in walk() for every counter-bearing eventType
+  // (group, block, function-block, custom-ace-block) — mirrors formatBlockLike's
+  // EventCounter so the synthetic script function name embedded by formatAction
+  // (e.g. `Sheet_Event2_Act1`) matches what extractScriptsFromSheet emits.
+  const counter: EventCounter = { value: 0 };
+
+  function summarize(event: BlockEvent | FunctionBlockEvent | CustomAceBlockEvent): string {
+    const parts: string[] = [];
+    // Defensive `?? []`: c3source types both arrays as required, but read-event-sids
+    // parses untrusted source JSON without runtime validation — a hand-edited or
+    // legacy sheet with a missing array previously fell through here harmlessly
+    // because the shallow map didn't touch them.
+    for (const cond of event.conditions ?? []) {
+      parts.push(formatConditionWithDisabled(cond));
+    }
+    const actions = event.actions ?? [];
+    for (let i = 0; i < actions.length; i++) {
+      // Use formatAction (not describeAction) so searchText includes parameter
+      // values, [DISABLED] prefix, [behaviorType] segment, and full (untruncated)
+      // comment/script text — the original gap report's `grep=BattleLayout` query
+      // is an action parameter value and would silently fail with describeAction.
+      parts.push(formatAction(actions[i], sheet.name, counter.value, i + 1));
+    }
+    // Newline keeps tokens from fusing across boundaries; searchText is grep-only
+    // (never displayed) so the separator choice is purely a regex concern.
+    return parts.join("\n");
+  }
 
   function walk(events: EventSheet["events"], basePath: string): void {
     for (let i = 0; i < events.length; i++) {
@@ -547,23 +580,41 @@ export function buildShallowSidMap(sheet: EventSheet): SidMapEntry[] {
 
       switch (event.eventType) {
         case "include":
-          entries.push({ jsonPath, sid: undefined, description: `include ${event.includeSheet}` });
+          entries.push({
+            jsonPath,
+            sid: undefined,
+            description: `include ${event.includeSheet}`,
+            searchText: "",
+          });
           break;
 
         case "comment": {
           const commentLines = normalizeLineEndings(event.text).split("\n");
           const firstLine = commentLines[0];
           const desc = commentLines.length > 1 ? `// ${firstLine}...` : `// ${firstLine}`;
-          entries.push({ jsonPath, sid: undefined, description: desc });
+          entries.push({ jsonPath, sid: undefined, description: desc, searchText: "" });
           break;
         }
 
         case "variable":
-          entries.push({ jsonPath, sid: event.sid, description: formatVariableDescription(event) });
+          entries.push({
+            jsonPath,
+            sid: event.sid,
+            description: formatVariableDescription(event),
+            searchText: "",
+          });
           break;
 
         case "group": {
-          entries.push({ jsonPath, sid: event.sid, description: `group "${event.title}"` });
+          // formatGroup increments the counter; mirror so summarize's
+          // sibling block sees the same eventIndex the DSL extractor uses.
+          counter.value++;
+          entries.push({
+            jsonPath,
+            sid: event.sid,
+            description: `group "${event.title}"`,
+            searchText: "",
+          });
           if (event.children) {
             walk(event.children, `${jsonPath}.children`);
           }
@@ -571,6 +622,7 @@ export function buildShallowSidMap(sheet: EventSheet): SidMapEntry[] {
         }
 
         case "block": {
+          counter.value++; // mirror formatBlock
           const flags: string[] = [];
           if ("isOrBlock" in event && (event as Record<string, unknown>).isOrBlock === true) {
             flags.push("OR");
@@ -579,7 +631,12 @@ export function buildShallowSidMap(sheet: EventSheet): SidMapEntry[] {
             flags.push("DISABLED");
           }
           const flagStr = flags.length > 0 ? ` [${flags.join(", ")}]` : "";
-          entries.push({ jsonPath, sid: event.sid, description: `block${flagStr}` });
+          entries.push({
+            jsonPath,
+            sid: event.sid,
+            description: `block${flagStr}`,
+            searchText: summarize(event),
+          });
           if (event.children && event.children.length > 0) {
             walk(event.children, `${jsonPath}.children`);
           }
@@ -587,14 +644,26 @@ export function buildShallowSidMap(sheet: EventSheet): SidMapEntry[] {
         }
 
         case "function-block":
-          entries.push({ jsonPath, sid: event.sid, description: `function "${event.functionName}"` });
+          counter.value++; // mirror formatFunctionBlock
+          entries.push({
+            jsonPath,
+            sid: event.sid,
+            description: `function "${event.functionName}"`,
+            searchText: summarize(event),
+          });
           if (event.children && event.children.length > 0) {
             walk(event.children, `${jsonPath}.children`);
           }
           break;
 
         case "custom-ace-block":
-          entries.push({ jsonPath, sid: event.sid, description: `ace "${event.objectClass}.${event.aceName}"` });
+          counter.value++; // mirror formatCustomAceBlock
+          entries.push({
+            jsonPath,
+            sid: event.sid,
+            description: `ace "${event.objectClass}.${event.aceName}"`,
+            searchText: summarize(event),
+          });
           if (event.children && event.children.length > 0) {
             walk(event.children, `${jsonPath}.children`);
           }

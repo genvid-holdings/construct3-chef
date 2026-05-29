@@ -1663,4 +1663,227 @@ describe("buildShallowSidMap", () => {
     assert.equal(result[1].jsonPath, "events[0].children[0]");
     assert.equal(result[2].jsonPath, "events[0].children[0].children[0]");
   });
+
+  // searchText is grep-only (never displayed); it lets `read-event-sids grep=...`
+  // match condition/action content, not just the description column.
+
+  it("block searchText includes condition summary so grep can match condition id", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-touched-object", objectClass: "Touch", sid: 1 }],
+      actions: [],
+      sid: 200,
+    };
+    const result = buildShallowSidMap(makeSheet([event]));
+    assert.equal(result.length, 1);
+    const entry = result[0] as SidMapEntry;
+    assert.equal(entry.description, "block");
+    assert.include(entry.searchText, "Touch.on-touched-object");
+  });
+
+  it("block searchText includes callFunction action name", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [{ callFunction: "doSetup", sid: 2 }],
+      sid: 201,
+    };
+    const result = buildShallowSidMap(makeSheet([event]));
+    assert.equal(result.length, 1);
+    const entry = result[0] as SidMapEntry;
+    assert.include(entry.searchText, "call doSetup()");
+  });
+
+  it("block searchText includes standard action parameter values (the original grep=BattleLayout case)", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [
+        {
+          id: "go-to-layout",
+          objectClass: "System",
+          sid: 3,
+          parameters: { layout: "BattleLayout" },
+        },
+      ],
+      sid: 202,
+    };
+    const result = buildShallowSidMap(makeSheet([event]));
+    assert.equal(result.length, 1);
+    const entry = result[0] as SidMapEntry;
+    assert.include(entry.searchText, "System.go-to-layout");
+    // The motivating gap-report query — parameter value, not the action id —
+    // must appear in searchText for `grep=BattleLayout` to find this block.
+    assert.include(entry.searchText, "BattleLayout");
+  });
+
+  it("NOT condition is reflected in searchText (formatCondition NOT prefix)", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [
+        { id: "compare-eventvar", objectClass: "System", sid: 4, isInverted: true },
+      ],
+      actions: [],
+      sid: 203,
+    };
+    const result = buildShallowSidMap(makeSheet([event]));
+    assert.equal(result.length, 1);
+    const entry = result[0] as SidMapEntry;
+    assert.include(entry.searchText, "NOT");
+    assert.include(entry.searchText, "System.compare-eventvar");
+  });
+
+  it("disabled condition is reflected in searchText with [DISABLED] prefix", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      // c3source's Condition type doesn't declare `disabled`, but C3 stores it
+      // at runtime — formatConditionWithDisabled checks structurally.
+      conditions: [
+        {
+          id: "compare-eventvar",
+          objectClass: "System",
+          sid: 5,
+          disabled: true,
+        } as unknown as import("c3source").Condition,
+      ],
+      actions: [],
+      sid: 204,
+    };
+    const result = buildShallowSidMap(makeSheet([event]));
+    assert.equal(result.length, 1);
+    const entry = result[0] as SidMapEntry;
+    assert.include(entry.searchText, "[DISABLED]");
+  });
+
+  it("disabled action is reflected in searchText with [DISABLED] prefix (via formatAction)", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [
+        {
+          id: "go-to-layout",
+          objectClass: "System",
+          sid: 6,
+          disabled: true,
+          parameters: { layout: "X" },
+        },
+      ],
+      sid: 205,
+    };
+    const result = buildShallowSidMap(makeSheet([event]));
+    assert.equal(result.length, 1);
+    const entry = result[0] as SidMapEntry;
+    assert.include(entry.searchText, "[DISABLED]");
+  });
+
+  it("behavior-scoped action is reflected in searchText with [behaviorType] segment", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [
+        {
+          id: "set-vector-x",
+          objectClass: "Player",
+          behaviorType: "Platform",
+          sid: 7,
+          parameters: { value: "100" },
+        },
+      ],
+      sid: 206,
+    };
+    const result = buildShallowSidMap(makeSheet([event]));
+    assert.equal(result.length, 1);
+    const entry = result[0] as SidMapEntry;
+    assert.include(entry.searchText, "Player[Platform].set-vector-x");
+  });
+
+  it("function-block searchText includes its inner action summaries", () => {
+    const event: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "doSetup",
+      functionReturnType: "none",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [],
+      conditions: [],
+      actions: [{ callFunction: "innerCall", sid: 5 }],
+      sid: 300,
+    };
+    const result = buildShallowSidMap(makeSheet([event]));
+    assert.equal(result.length, 1);
+    const entry = result[0] as SidMapEntry;
+    assert.equal(entry.description, 'function "doSetup"');
+    assert.include(entry.searchText, "call innerCall()");
+  });
+
+  it("variable / include / comment / group have empty searchText", () => {
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "hp",
+      type: "number",
+      initialValue: "100",
+      isStatic: false,
+      isConstant: false,
+      sid: 101,
+    };
+    const include: IncludeEvent = { eventType: "include", includeSheet: "CommonEvents" };
+    const comment: CommentEvent = { eventType: "comment", text: "note" };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "Setup",
+      isActiveOnStart: true,
+      children: [],
+      sid: 400,
+    };
+    const result = buildShallowSidMap(makeSheet([variable, include, comment, group]));
+    for (const entry of result) {
+      assert.equal(entry.searchText, "", `expected empty searchText for ${entry.description}`);
+    }
+  });
+
+  it("block with missing conditions / actions arrays does not throw (defensive guard)", () => {
+    // c3source's BlockEvent declares both as required, but the read-event-sids
+    // handler parses raw JSON without runtime validation. A legacy or hand-edited
+    // sheet that omits the array should degrade to empty searchText, not crash
+    // the whole tool call.
+    const event = {
+      eventType: "block",
+      sid: 210,
+      // conditions: missing, actions: missing
+    } as unknown as BlockEvent;
+    const result = buildShallowSidMap(makeSheet([event]));
+    assert.equal(result.length, 1);
+    assert.equal(result[0].searchText, "");
+  });
+
+  it("eventCounter mirrors formatBlockLike — group before block bumps the index passed to formatAction", () => {
+    // Sheet = [group, block-with-multiline-script]. formatBlockLike emits the
+    // script function name as `<Sheet>_Event2_Act1` (group=1, block=2). The
+    // counter shared between walk() and summarize() must produce the same name
+    // so a user copying the function name out of extracted/scripts can grep it.
+    const scriptAction: ScriptAction = {
+      type: "script",
+      language: "typescript",
+      script: ["a()", "b()"],
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "G",
+      isActiveOnStart: true,
+      children: [],
+      sid: 500,
+    };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [scriptAction],
+      sid: 501,
+    };
+    const result = buildShallowSidMap(makeSheet([group, block]));
+    assert.equal(result.length, 2);
+    // The block entry (index 1) should embed the Event2_Act1 synthetic name.
+    assert.include(result[1].searchText, "TestSheet_Event2_Act1");
+  });
 });

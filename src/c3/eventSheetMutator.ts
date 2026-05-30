@@ -12,7 +12,7 @@ import type {
   FunctionParameter,
   ScriptAction,
 } from "c3source";
-import { isScriptAction, hasActions, hasConditions, canHaveChildren } from "c3source";
+import { isScriptAction, hasActions, hasConditions, canHaveChildren, visitEvents } from "c3source";
 import type { SidGenerator } from "./sidUtils.js";
 
 export type { ScriptAction, IncludeEvent, CommentEvent } from "c3source";
@@ -40,22 +40,15 @@ export type SidIndex = Map<number, SidIndexEntry>;
 export function buildSidIndex(sheet: EventSheet): SidIndex {
   const index: SidIndex = new Map();
 
-  function walk(events: EventSheetEvent[], parentArray: EventSheetEvent[]): void {
-    for (let i = 0; i < events.length; i++) {
-      const event = events[i];
-      if ("sid" in event && typeof event.sid === "number") {
-        if (index.has(event.sid)) {
-          throw new Error(`Duplicate SID ${event.sid} found in event sheet "${sheet.name}"`);
-        }
-        index.set(event.sid, { node: event, parentArray, indexInParent: i });
+  visitEvents(sheet.events, (event, ctx) => {
+    if ("sid" in event && typeof event.sid === "number") {
+      if (index.has(event.sid)) {
+        throw new Error(`Duplicate SID ${event.sid} found in event sheet "${sheet.name}"`);
       }
-      if ("children" in event && Array.isArray(event.children)) {
-        walk(event.children, event.children);
-      }
+      index.set(event.sid, { node: event, parentArray: ctx.parent, indexInParent: ctx.index });
     }
-  }
+  });
 
-  walk(sheet.events, sheet.events);
   return index;
 }
 

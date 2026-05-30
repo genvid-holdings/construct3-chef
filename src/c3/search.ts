@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { walkFiles, toPosixPath } from "genvid-mcp-utils";
 
 /** File category for search operations. */
 export type SearchType = "dsl" | "ts" | "layout" | "md" | "json" | "idx";
@@ -44,34 +45,6 @@ const TYPE_MAP: Record<SearchType, TypeEntry> = {
   json: { baseDir: "project", subDir: "", ext: ".json" },
 };
 
-/**
- * Convert path separators to forward slashes for consistent output.
- */
-function toForwardSlash(p: string): string {
-  return p.replace(/\\/g, "/");
-}
-
-/**
- * Recursively collect all files under dir whose names end with ext.
- */
-function walkFiles(dir: string, ext: string): string[] {
-  const results: string[] = [];
-  if (!fs.existsSync(dir)) return results;
-
-  function walk(current: string): void {
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const full = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        walk(full);
-      } else if (entry.name.endsWith(ext)) {
-        results.push(full);
-      }
-    }
-  }
-
-  walk(dir);
-  return results;
-}
 
 /**
  * Format a set of line windows (with context) for a single file.
@@ -151,7 +124,7 @@ export function search(config: SearchConfig, options: SearchOptions): SearchResu
         "path is required for json type — must include 'eventSheets/' or 'layouts/' prefix"
       );
     }
-    const normalized = toForwardSlash(options.path);
+    const normalized = toPosixPath(options.path);
     if (!normalized.startsWith("eventSheets/") && !normalized.startsWith("layouts/")) {
       throw new Error(
         `json type path must start with 'eventSheets/' or 'layouts/', got: '${options.path}'`
@@ -216,7 +189,7 @@ export function search(config: SearchConfig, options: SearchOptions): SearchResu
     if (truncated) break;
 
     const content = fs.readFileSync(filePath, "utf-8").split("\n");
-    const relPath = toForwardSlash(
+    const relPath = toPosixPath(
       isExtracted
         ? path.relative(config.extractedDir, filePath)
         : path.relative(config.projectRoot, filePath)

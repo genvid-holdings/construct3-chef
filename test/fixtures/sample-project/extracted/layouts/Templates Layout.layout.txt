@@ -1,0 +1,10 @@
+# Templates Layout
+# Source: layouts/Templates Layout.json
+# Size: 960 x 1280
+
+## Layers (1)
+
+Layer 0 (2 instances)
+  Sprite3 x1 (template: default)
+    └─ Text2
+

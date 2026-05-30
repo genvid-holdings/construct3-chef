@@ -6,7 +6,21 @@ import { z } from "zod";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ReadWriteLock, ExpectedChanges, paginateText, exposeDocs } from "genvid-mcp-utils";
+import {
+  ReadWriteLock,
+  ExpectedChanges,
+  OptimisticWatcher,
+  paginateText,
+  exposeDocs,
+  bufferingLogger,
+  resolveWithin,
+  walkFiles,
+  toPosixPath,
+  READ_ONLY,
+  REGENERATE,
+  MUTATE,
+  NON_IDEMPOTENT_READ,
+} from "genvid-mcp-utils";
 import type { Logger } from "genvid-mcp-utils";
 import { applyParsed } from "../c3/recipeApplier.js";
 import { validateRecipe, type Recipe } from "../c3/recipeInterpreter.js";
@@ -26,6 +40,7 @@ import type { EventSheet } from "c3source";
 import { resolveIncludeTree, formatIncludeTree, flattenIncludeTree } from "../c3/includeTree.js";
 import { collectAllUids, cloneLayout } from "../c3/layoutScaffold.js";
 import { search } from "../c3/search.js";
+import { createSourceWatcher } from "./sourceWatcher.js";
 import { resolveAnchor } from "../c3/anchorResolver.js";
 import {
   collectAllObjectTypeSids,
@@ -47,21 +62,16 @@ const rwlock = new ReadWriteLock();
 
 // ── Server State ─────────────────────────────────────────────────────────────
 
-let txId = 0;
 let extractedDirty = false;
-// >0 while a write tool is running — prevents double txId increment.
-// Safe without atomics because rwlock.write() serializes all write tools.
-let suppressWatcherDepth = 0;
+// The OptimisticWatcher owns txId, the suppress window, and the file watchers.
+// Assigned in setupWatchers() (called from startServer) before any tool runs.
+let watcher!: OptimisticWatcher;
 const expectedChanges = new ExpectedChanges();
 
-// ── Tool Annotations ─────────────────────────────────────────────────────────
-
-const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true } as const;
-const REGENERATE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true } as const;
-const MUTATE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false } as const;
-// Reads source files only (no project mutation) but returns different output per call —
-// e.g. random-SID minting. Clients must NOT treat as idempotent for retry/cache purposes.
-const NON_IDEMPOTENT_READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: false } as const;
+// Tool annotation presets (READ_ONLY / REGENERATE / MUTATE / NON_IDEMPOTENT_READ)
+// are imported from genvid-mcp-utils. NON_IDEMPOTENT_READ marks tools that read
+// source only but return different output per call (e.g. random-SID minting) —
+// clients must NOT treat them as idempotent for retry/cache purposes.
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -86,10 +96,6 @@ const INSTANCE_OVERRIDES_SCHEMA = z
   .strict();
 const CHILD_OVERRIDES_SCHEMA = z.record(INSTANCE_OVERRIDES_SCHEMA);
 
-/** Normalize Windows backslash paths to forward slashes. */
-function toForwardSlash(p: string): string {
-  return p.replace(/\\/g, "/");
-}
 
 function emitLog(level: "debug" | "info" | "warning" | "error", message: string): void {
   server.sendLoggingMessage({ level, logger: "construct3-chef", data: message }).catch(() => {});
@@ -130,8 +136,8 @@ async function runGenerators(log: Logger, extra?: Extra, progressOffset = 0, pro
 }
 
 function readExtracted(relPath: string): string | null {
-  const fullPath = path.resolve(path.join(EXTRACTED_DIR, relPath));
-  if (!fullPath.startsWith(EXTRACTED_DIR + path.sep) && fullPath !== EXTRACTED_DIR) return null;
+  const fullPath = resolveWithin(EXTRACTED_DIR, relPath);
+  if (fullPath === null) return null;
   if (!fs.existsSync(fullPath)) return null;
   return fs.readFileSync(fullPath, "utf-8");
 }
@@ -160,7 +166,7 @@ function checkSourceFreshness(sourcePath: string, extractedPath: string): void {
     const extractedMtime = fs.statSync(extractedPath).mtimeMs;
     if (sourceMtime > extractedMtime && !extractedDirty) {
       extractedDirty = true;
-      txId++;
+      watcher.bump();
       emitLog("warning", `Stale detected: source newer than extracted (${path.basename(sourcePath)})`);
     }
   } catch {
@@ -206,7 +212,7 @@ function checkRegistryFreshness(registryPath: string): void {
   }
   if (newestSourceMtime > registryMtime) {
     extractedDirty = true;
-    txId++;
+    watcher.bump();
     emitLog("warning", "Stale detected: source newer than sid-registry.txt");
   }
 }
@@ -234,52 +240,26 @@ function paginatedResponse(
 }
 
 function globRelative(dir: string, ext: string): string[] {
-  const results: string[] = [];
-  function walk(current: string) {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      return; // directory missing or inaccessible
-    }
-    for (const entry of entries) {
-      const full = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        walk(full);
-      } else if (entry.name.endsWith(ext)) {
-        results.push(toForwardSlash(path.relative(dir, full)));
-      }
-    }
-  }
-  walk(dir);
-  return results.sort();
+  return walkFiles(dir, ext)
+    .map((full) => toPosixPath(path.relative(dir, full)))
+    .sort();
 }
 
 // ── File Watchers ────────────────────────────────────────────────────────────
 
 function setupWatchers(): void {
-  const sourceDirs = ["eventSheets", "layouts", "objectTypes", "families", "scripts"];
-
-  for (const dir of sourceDirs) {
-    const fullDir = path.join(PROJECT_ROOT, dir);
-    if (!fs.existsSync(fullDir)) continue;
-    fs.watch(fullDir, { recursive: true }, (_event, filename) => {
-      if (!filename || suppressWatcherDepth > 0) return;
-      const normalized = toForwardSlash(path.join(dir, filename));
-      if (expectedChanges.consume(normalized)) return;
-      txId++;
+  watcher = createSourceWatcher({
+    projectRoot: PROJECT_ROOT,
+    expected: expectedChanges,
+    // External source-dir edit → mark extracted/ stale (txId already bumped by
+    // the watcher). project.c3proj edits bump txId only (handled inside
+    // createSourceWatcher), so they don't reach here.
+    onSourceChange: (filePath) => {
       extractedDirty = true;
-      emitLog("warning", `External change detected: ${normalized} (txId → ${txId})`);
-    });
-  }
-
-  // project.c3proj — increments txId but does NOT set extractedDirty
-  const c3projPath = path.join(PROJECT_ROOT, "project.c3proj");
-  if (fs.existsSync(c3projPath)) {
-    fs.watch(c3projPath, () => {
-      if (suppressWatcherDepth === 0) txId++;
-    });
-  }
+      emitLog("warning", `External change detected: ${filePath} (txId → ${watcher.txId})`);
+    },
+  });
+  watcher.start();
 
   // Periodically purge expired entries from expectedChanges
   setInterval(() => expectedChanges.purgeExpired(), 30_000).unref();
@@ -738,8 +718,7 @@ server.registerTool(
       // the file watcher may have missed (atomic-rename, git checkout, network mounts).
       // This matters: apply-recipe's optimistic-concurrency check uses our returned txId.
       checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
-      const lines: string[] = [];
-      const log: Logger = (...args) => lines.push(args.map(String).join(" "));
+      const { log, text } = bufferingLogger();
       try {
         const recipe: Recipe = JSON.parse(recipeJson);
         const errors = validateRecipe(recipe);
@@ -747,7 +726,7 @@ server.registerTool(
           return {
             content: [
               { type: "text", text: `Validation errors:\n${errors.join("\n")}` },
-              { type: "text", text: `txId: ${txId}` },
+              { type: "text", text: `txId: ${watcher.txId}` },
             ],
             isError: true,
           };
@@ -755,15 +734,15 @@ server.registerTool(
         applyParsed(PROJECT_ROOT, recipe, { dryRun: true, log });
         return {
           content: [
-            { type: "text", text: lines.join("\n") },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: text() },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
         };
       } catch (e) {
         return {
           content: [
             { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
           isError: true,
         };
@@ -798,50 +777,46 @@ server.registerTool(
       checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
       const shouldRegenerate = regenerate !== false;
       const totalSteps = shouldRegenerate ? 6 : 1; // apply + 5 generators
-      const lines: string[] = [];
-      const log: Logger = (...args) => lines.push(args.map(String).join(" "));
+      const { log, text } = bufferingLogger();
       try {
-        if (expectedTxId !== undefined && expectedTxId !== txId) {
+        if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
           return {
             content: [
-              { type: "text", text: `State changed (expected ${expectedTxId}, got ${txId}) — re-validate before applying` },
-              { type: "text", text: `txId: ${txId}` },
+              { type: "text", text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying` },
+              { type: "text", text: `txId: ${watcher.txId}` },
             ],
             isError: true,
           };
         }
         const recipe: Recipe = JSON.parse(recipeJson);
         // Suppress watcher during writes — we manage txId/extractedDirty ourselves
-        suppressWatcherDepth++;
-        try {
+        await watcher.suppress(async () => {
           await sendProgress(extra, 0, totalSteps, "Applying recipe");
           applyParsed(PROJECT_ROOT, recipe, { regenerate: false, log });
           if (shouldRegenerate) {
             await runGenerators(log, extra, 1, totalSteps);
           }
-        } finally {
-          suppressWatcherDepth--;
-        }
-        txId++;
+        });
+        watcher.bump();
         if (shouldRegenerate) {
           extractedDirty = false;
         }
         return {
           content: [
-            { type: "text", text: lines.join("\n") },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: text() },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
         };
       } catch (e) {
         if (e instanceof CancelledError) {
           // Recipe already applied (source files modified) but regeneration interrupted
-          txId++;
+          watcher.bump();
           extractedDirty = true;
         }
         return {
           content: [
             { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
           isError: true,
         };
@@ -862,23 +837,19 @@ server.registerTool(
   },
   async (_args: Record<string, never>, extra: Extra) =>
     rwlock.write(async () => {
-      const lines: string[] = [];
-      const log: Logger = (...args) => lines.push(args.map(String).join(" "));
+      const { log, text } = bufferingLogger();
       try {
         // Suppress watcher — regenerate writes only to extracted/ (derived output)
-        suppressWatcherDepth++;
-        try {
+        await watcher.suppress(async () => {
           await runGenerators(log, extra);
-        } finally {
-          suppressWatcherDepth--;
-        }
+        });
         extractedDirty = false;
         return {
-          content: [{ type: "text", text: lines.join("\n") }],
+          content: [{ type: "text", text: text() }],
         };
       } catch (e) {
         if (e instanceof CancelledError) {
-          // Partially regenerated — stale. No txId++ (regenerate doesn't modify source files)
+          // Partially regenerated — stale. No watcher.bump() (regenerate doesn't modify source files)
           extractedDirty = true;
         }
         return {
@@ -902,21 +873,20 @@ server.registerTool(
   },
   async () =>
     rwlock.read(async () => {
-      const lines: string[] = [];
-      const log: Logger = (...args) => lines.push(args.map(String).join(" "));
+      const { log, text } = bufferingLogger();
       try {
         runSync(PROJECT_ROOT, true, log);
         return {
           content: [
-            { type: "text", text: lines.join("\n") },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: text() },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
         };
       } catch (e) {
         return {
           content: [
             { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
           isError: true,
         };
@@ -940,37 +910,33 @@ server.registerTool(
   },
   async ({ txId: expectedTxId }) =>
     rwlock.write(async () => {
-      const lines: string[] = [];
-      const log: Logger = (...args) => lines.push(args.map(String).join(" "));
+      const { log, text } = bufferingLogger();
       try {
-        if (expectedTxId !== undefined && expectedTxId !== txId) {
+        if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
           return {
             content: [
-              { type: "text", text: `State changed (expected ${expectedTxId}, got ${txId}) — re-validate before syncing` },
-              { type: "text", text: `txId: ${txId}` },
+              { type: "text", text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before syncing` },
+              { type: "text", text: `txId: ${watcher.txId}` },
             ],
             isError: true,
           };
         }
         // Suppress watcher — we manage txId ourselves
-        suppressWatcherDepth++;
-        try {
+        await watcher.suppress(async () => {
           runSync(PROJECT_ROOT, false, log);
-        } finally {
-          suppressWatcherDepth--;
-        }
-        txId++;
+        });
+        watcher.bump();
         return {
           content: [
-            { type: "text", text: lines.join("\n") },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: text() },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
         };
       } catch (e) {
         return {
           content: [
             { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
           isError: true,
         };
@@ -1042,11 +1008,10 @@ server.registerTool(
       }
 
       const targetFile = file ?? "aces.json";
-      const filePath = path.resolve(path.join(addonPath, targetFile));
 
       // Path traversal check — reject paths that escape the addon directory
-      const relative = path.relative(addonPath, filePath);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      const filePath = resolveWithin(addonPath, targetFile);
+      if (filePath === null) {
         return notFound("read-addon", `Invalid file path '${targetFile}' — must stay within addon directory`);
       }
 
@@ -1091,14 +1056,13 @@ server.registerTool(
     rwlock.write(async () => {
       const shouldRegenerate = regenerate !== false;
       const totalSteps = shouldRegenerate ? 7 : 2; // clone + sync + 5 generators
-      const lines: string[] = [];
-      const log: Logger = (...args) => lines.push(args.map(String).join(" "));
+      const { log, text } = bufferingLogger();
       try {
-        if (expectedTxId !== undefined && expectedTxId !== txId) {
+        if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
           return {
             content: [
-              { type: "text", text: `State changed (expected ${expectedTxId}, got ${txId}) — re-validate before scaffolding` },
-              { type: "text", text: `txId: ${txId}` },
+              { type: "text", text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding` },
+              { type: "text", text: `txId: ${watcher.txId}` },
             ],
             isError: true,
           };
@@ -1107,26 +1071,24 @@ server.registerTool(
         const layoutsDir = path.join(PROJECT_ROOT, "layouts");
 
         // Path traversal check — output must stay within layouts/
-        const outFullPath = path.resolve(path.join(layoutsDir, outRelPath));
-        const outRelative = path.relative(layoutsDir, outFullPath);
-        if (outRelative.startsWith("..") || path.isAbsolute(outRelative)) {
+        const outFullPath = resolveWithin(layoutsDir, outRelPath);
+        if (outFullPath === null) {
           return {
             content: [
               { type: "text", text: `Invalid output path '${outRelPath}' — must stay within layouts/` },
-              { type: "text", text: `txId: ${txId}` },
+              { type: "text", text: `txId: ${watcher.txId}` },
             ],
             isError: true,
           };
         }
 
         // Path traversal check — source must stay within layouts/
-        const sourceFullPath = path.resolve(path.join(layoutsDir, source));
-        const sourceRelative = path.relative(layoutsDir, sourceFullPath);
-        if (sourceRelative.startsWith("..") || path.isAbsolute(sourceRelative)) {
+        const sourceFullPath = resolveWithin(layoutsDir, source);
+        if (sourceFullPath === null) {
           return {
             content: [
               { type: "text", text: `Invalid source path '${source}' — must stay within layouts/` },
-              { type: "text", text: `txId: ${txId}` },
+              { type: "text", text: `txId: ${watcher.txId}` },
             ],
             isError: true,
           };
@@ -1135,7 +1097,7 @@ server.registerTool(
           return {
             content: [
               { type: "text", text: `Source layout not found: layouts/${source}` },
-              { type: "text", text: `txId: ${txId}` },
+              { type: "text", text: `txId: ${watcher.txId}` },
             ],
             isError: true,
           };
@@ -1155,13 +1117,12 @@ server.registerTool(
         const cloned = cloneLayout(sourceLayout, { name, eventSheet, existingUids, existingSids });
 
         // Write output
-        suppressWatcherDepth++;
-        try {
+        await watcher.suppress(async () => {
           // Ensure output directory exists
           const outDir = path.dirname(outFullPath);
           fs.mkdirSync(outDir, { recursive: true });
           fs.writeFileSync(outFullPath, JSON.stringify(cloned, null, "\t") + "\n");
-          expectedChanges.add(toForwardSlash(path.relative(PROJECT_ROOT, outFullPath)));
+          watcher.expect(outFullPath);
           await sendProgress(extra, 0, totalSteps, "Cloning layout");
           log(`Scaffolded ${name} → layouts/${outRelPath}`);
 
@@ -1173,30 +1134,28 @@ server.registerTool(
           if (shouldRegenerate) {
             await runGenerators(log, extra, 2, totalSteps);
           }
-        } finally {
-          suppressWatcherDepth--;
-        }
+        });
 
-        txId++;
+        watcher.bump();
         if (shouldRegenerate) {
           extractedDirty = false;
         }
         return {
           content: [
-            { type: "text", text: lines.join("\n") },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: text() },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
         };
       } catch (e) {
         if (e instanceof CancelledError) {
           // Layout was already written — source files changed, extracted/ is stale
-          txId++;
+          watcher.bump();
           extractedDirty = true;
         }
         return {
           content: [
             { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
           isError: true,
         };
@@ -1224,14 +1183,13 @@ server.registerTool(
   },
   async ({ source, name: targetName, txId: expectedTxId }) =>
     rwlock.write(async () => {
-      const lines: string[] = [];
-      const log: Logger = (...args) => lines.push(args.map(String).join(" "));
+      const { log, text } = bufferingLogger();
       try {
-        if (expectedTxId !== undefined && expectedTxId !== txId) {
+        if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
           return {
             content: [
-              { type: "text", text: `State changed (expected ${expectedTxId}, got ${txId}) — re-validate before scaffolding` },
-              { type: "text", text: `txId: ${txId}` },
+              { type: "text", text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding` },
+              { type: "text", text: `txId: ${watcher.txId}` },
             ],
             isError: true,
           };
@@ -1246,7 +1204,7 @@ server.registerTool(
             return {
               content: [
                 { type: "text", text: `Invalid ${label} '${val}' — must be a plain objectType name without path separators` },
-                { type: "text", text: `txId: ${txId}` },
+                { type: "text", text: `txId: ${watcher.txId}` },
               ],
               isError: true,
             };
@@ -1259,7 +1217,7 @@ server.registerTool(
           return {
             content: [
               { type: "text", text: `Source objectType not found: objectTypes/${source}.json` },
-              { type: "text", text: `txId: ${txId}` },
+              { type: "text", text: `txId: ${watcher.txId}` },
             ],
             isError: true,
           };
@@ -1280,12 +1238,11 @@ server.registerTool(
         });
 
         // Write output and copy images
-        suppressWatcherDepth++;
-        try {
+        await watcher.suppress(async () => {
           // Write objectType JSON
           const outFile = path.join(objectTypesDir, `${targetName}.json`);
           fs.writeFileSync(outFile, JSON.stringify(cloned, null, "\t") + "\n");
-          expectedChanges.add(`objectTypes/${targetName}.json`);
+          watcher.expect(outFile);
           log(`Scaffolded ${targetName} → objectTypes/${targetName}.json`);
 
           // Discover and copy images (images/ is NOT watched — no expectedChanges needed)
@@ -1299,27 +1256,25 @@ server.registerTool(
 
           // Sync project.c3proj
           runSync(PROJECT_ROOT, false, log);
-        } finally {
-          suppressWatcherDepth--;
-        }
+        });
 
-        txId++;
+        watcher.bump();
         return {
           content: [
-            { type: "text", text: lines.join("\n") },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: text() },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
         };
       } catch (e) {
         if (e instanceof CancelledError) {
           // Sprite was already written — source files changed, extracted/ may be stale
-          txId++;
+          watcher.bump();
           extractedDirty = true;
         }
         return {
           content: [
             { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${txId}` },
+            { type: "text", text: `txId: ${watcher.txId}` },
           ],
           isError: true,
         };
@@ -1333,11 +1288,11 @@ server.registerTool(
 // hands it to applyParsed. The recipe pipeline (expandWorkflows → primitive
 // dispatch → SidGenerator threading) handles fan-out, SID allocation, and
 // scene-graphs-folder-root registration — the MCP layer just owns the
-// concurrency boilerplate (rwlock, txId, suppressWatcher, registry freshness).
+// concurrency boilerplate (rwlock, the OptimisticWatcher, registry freshness).
 //
-// Mirrors the apply-recipe pattern (lines ~753–829). No expectedChanges.add
-// (suppressWatcher is sufficient for the watcher contract; apply-recipe does
-// the same).
+// Mirrors the apply-recipe pattern. No watcher.expect() — wrapping the writes
+// in watcher.suppress() is sufficient for the watcher contract (apply-recipe
+// does the same).
 
 async function runWorkflowRecipe(
   recipe: Recipe,
@@ -1348,47 +1303,43 @@ async function runWorkflowRecipe(
   checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
   const shouldRegenerate = regenerate !== false;
   const totalSteps = shouldRegenerate ? 6 : 1;
-  const lines: string[] = [];
-  const log: Logger = (...args) => lines.push(args.map(String).join(" "));
+  const { log, text } = bufferingLogger();
   try {
-    if (expectedTxId !== undefined && expectedTxId !== txId) {
+    if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
       return {
         content: [
-          { type: "text", text: `State changed (expected ${expectedTxId}, got ${txId}) — re-validate before applying` },
-          { type: "text", text: `txId: ${txId}` },
+          { type: "text", text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying` },
+          { type: "text", text: `txId: ${watcher.txId}` },
         ],
         isError: true,
       };
     }
-    suppressWatcherDepth++;
-    try {
+    await watcher.suppress(async () => {
       await sendProgress(extra, 0, totalSteps, "Applying workflow");
       applyParsed(PROJECT_ROOT, recipe, { regenerate: false, log });
       if (shouldRegenerate) {
         await runGenerators(log, extra, 1, totalSteps);
       }
-    } finally {
-      suppressWatcherDepth--;
-    }
-    txId++;
+    });
+    watcher.bump();
     if (shouldRegenerate) {
       extractedDirty = false;
     }
     return {
       content: [
-        { type: "text", text: lines.join("\n") },
-        { type: "text", text: `txId: ${txId}` },
+        { type: "text", text: text() },
+        { type: "text", text: `txId: ${watcher.txId}` },
       ],
     };
   } catch (e) {
     if (e instanceof CancelledError) {
-      txId++;
+      watcher.bump();
       extractedDirty = true;
     }
     return {
       content: [
         { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-        { type: "text", text: `txId: ${txId}` },
+        { type: "text", text: `txId: ${watcher.txId}` },
       ],
       isError: true,
     };
@@ -1565,7 +1516,7 @@ server.registerTool(
   async () =>
     rwlock.read(async () => {
       return {
-        content: [{ type: "text", text: `txId: ${txId}\nextractedDirty: ${extractedDirty}` }],
+        content: [{ type: "text", text: `txId: ${watcher.txId}\nextractedDirty: ${extractedDirty}` }],
       };
     })
 );

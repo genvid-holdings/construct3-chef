@@ -2,9 +2,10 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { extractScripts, generateDSL, generateLayoutSummaries } from "./generators.js";
 import type { Logger } from "genvid-mcp-utils";
+import { escapeRegExp } from "genvid-mcp-utils";
 import type { ApplyOptions } from "./types.js";
-import type { EventSheet, EventSheetEvent } from "c3source";
-import { find_all_eventsheets_path, find_all_objectTypes_path, find_all_layouts_path } from "c3source";
+import type { EventSheet, EventSheetEvent, SidSlot } from "c3source";
+import { find_all_eventsheets_path, find_all_objectTypes_path, find_all_layouts_path, findSid } from "c3source";
 import {
   type Recipe,
   type ObjectTypeCreate,
@@ -390,10 +391,6 @@ export function applyNonworldInstance(
 
 // ─── Main apply function ───
 
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /** Resolve a `"sid:X"` variable ref to its name in the given sheet, or null. */
 function findVariableNameBySidRef(sheet: EventSheet, ref: string): string | null {
   const sid = Number(ref.slice("sid:".length));
@@ -465,52 +462,19 @@ function checkMoveVariableDemotions(
 
 // ─── SID location lookup (apply-time hinting) ───
 
-type SidSlot = "event" | "condition" | "action" | "function-parameter";
-
 /**
- * Walks `sheet` for the given `sid` and reports where it lives. Used to enrich
- * the "SID not found in event sheet" / "does not support actions" errors when
- * the SID does actually exist on a condition, action, or function parameter —
- * the canonical trap behind the bug "agents grab a non-event SID surfaced by
- * read-dsl-index". `buildSidIndex` only indexes top-level events (block /
- * function-block / group / variable / …), so the SID-resolution path can't
- * distinguish "totally missing" from "present on a non-event slot". Returns
- * `null` when the SID is truly absent.
+ * Reports which slot the given `sid` lives in (event / condition / action /
+ * function-parameter), or `null` when truly absent. Thin wrapper over
+ * c3source's `findSid`, which owns the schema knowledge of which slots carry
+ * sids. Used to enrich the "SID not found in event sheet" / "does not support
+ * actions" errors when the SID actually exists on a non-event slot — the
+ * canonical trap behind "agents grab a non-event SID surfaced by
+ * read-dsl-index". `buildSidIndex` only indexes top-level events, so the
+ * SID-resolution path can't otherwise distinguish "totally missing" from
+ * "present on a non-event slot".
  */
 function findSidLocation(sheet: EventSheet, sid: number): SidSlot | null {
-  function walk(nodes: EventSheetEvent[]): SidSlot | null {
-    for (const ev of nodes) {
-      if ("sid" in ev && (ev as { sid?: number }).sid === sid) return "event";
-      const conditions = (ev as { conditions?: Array<{ sid?: number }> }).conditions;
-      if (Array.isArray(conditions)) {
-        for (const c of conditions) {
-          if (c && c.sid === sid) return "condition";
-        }
-      }
-      const actions = (ev as { actions?: Array<{ sid?: number }> }).actions;
-      if (Array.isArray(actions)) {
-        for (const a of actions) {
-          if (a && a.sid === sid) return "action";
-        }
-      }
-      // function-block / custom-ace-block parameter definitions carry their
-      // own SIDs (the initiative explicitly lists these as first-class
-      // targetable and a known bug source).
-      const params = (ev as { functionParameters?: Array<{ sid?: number }> }).functionParameters;
-      if (Array.isArray(params)) {
-        for (const p of params) {
-          if (p && p.sid === sid) return "function-parameter";
-        }
-      }
-      const children = (ev as { children?: EventSheetEvent[] }).children;
-      if (Array.isArray(children)) {
-        const inChild = walk(children);
-        if (inChild) return inChild;
-      }
-    }
-    return null;
-  }
-  return walk(sheet.events);
+  return findSid(sheet, sid)?.slot ?? null;
 }
 
 /**

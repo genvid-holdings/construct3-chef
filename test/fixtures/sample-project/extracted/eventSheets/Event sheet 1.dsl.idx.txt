@@ -1,0 +1,5 @@
+# Event sheet 1 — DSL Coordinate Index
+# Regenerate: npm run generate-dsl
+#
+# Event | JSON Path | SID              | DSL Line | Description
+#-------|-----------|------------------|----------|-----------

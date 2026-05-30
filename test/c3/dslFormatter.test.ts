@@ -1736,15 +1736,13 @@ describe("buildShallowSidMap", () => {
   it("disabled condition is reflected in searchText with [DISABLED] prefix", () => {
     const event: BlockEvent = {
       eventType: "block",
-      // c3source's Condition type doesn't declare `disabled`, but C3 stores it
-      // at runtime — formatConditionWithDisabled checks structurally.
       conditions: [
         {
           id: "compare-eventvar",
           objectClass: "System",
           sid: 5,
           disabled: true,
-        } as unknown as import("c3source").Condition,
+        },
       ],
       actions: [],
       sid: 204,

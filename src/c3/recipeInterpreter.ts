@@ -11,6 +11,8 @@ import type {
   CustomAceBlockEvent,
   FunctionParameter,
 } from "c3source";
+import { isScriptAction } from "c3source";
+import { escapeRegExp } from "genvid-mcp-utils";
 
 import {
   buildBlock,
@@ -37,7 +39,7 @@ import {
   replaceCondition,
   resolveNode,
   hasActions,
-  hasChildren,
+  canHaveChildren,
   walkScriptActions,
   walkScriptActionsInArray,
   buildSidIndex,
@@ -876,7 +878,7 @@ export function executeOp(
         // `in` on insert-event means "insert into this container's children"
         const containerEntry = resolveEventRef(op.in, _sidIndex, _symbolTable);
         const containerNode = containerEntry.node;
-        if (!hasChildren(containerNode)) {
+        if (!canHaveChildren(containerNode)) {
           throw new Error(`insert-event: target "${op.in}" (eventType: "${containerNode.eventType}") is not a container`);
         }
         if (!containerNode.children) {
@@ -932,7 +934,7 @@ export function executeOp(
       if (op.in !== undefined) {
         const containerEntry = resolveEventRef(op.in, _sidIndex, _symbolTable);
         const containerNode = containerEntry.node;
-        if (!hasChildren(containerNode)) {
+        if (!canHaveChildren(containerNode)) {
           throw new Error(`insert-variables: target "${op.in}" (eventType: "${containerNode.eventType}") is not a container`);
         }
         if (!containerNode.children) {
@@ -1359,7 +1361,7 @@ export function executeOp(
         destArray = sheet.events;
       } else {
         const destContainer = resolveNodeFromRef(sheet, op.to, undefined, _sidIndex, _symbolTable);
-        if (!hasChildren(destContainer)) {
+        if (!canHaveChildren(destContainer)) {
           throw new Error(`move-variable: destination "${op.to}" is not a container (has no children)`);
         }
         if (!destContainer.children) {
@@ -1502,13 +1504,6 @@ function findScriptActionByContent(
   }
 
   return matches[0];
-}
-
-function isScriptAction(action: ScriptAction | Record<string, unknown>): action is ScriptAction {
-  return (
-    (action as ScriptAction).type === "script" &&
-    (action as ScriptAction).language === "typescript"
-  );
 }
 
 // Node-based variants used by SID-resolved ops
@@ -1753,10 +1748,6 @@ function renameSymbol(
       `rename-symbol: no replacements matched in any script action. Searched for: ${fromList}`,
     );
   }
-}
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

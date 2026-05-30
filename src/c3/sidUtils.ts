@@ -94,29 +94,7 @@ export function mintUniqueSid(usedSids: Set<number>): number {
     );
 }
 
-/**
- * Recursively collect all numeric `sid` values from any C3 JSON value.
- * Returns an empty Set for null, undefined, or non-object inputs.
- */
-export function collectSids(json: unknown): Set<number> {
-    const result = new Set<number>();
-    collectSidsInto(json, result);
-    return result;
-}
-
-function collectSidsInto(value: unknown, result: Set<number>): void {
-    if (value === null || value === undefined) return;
-    if (Array.isArray(value)) {
-        for (const item of value) {
-            collectSidsInto(item, result);
-        }
-    } else if (typeof value === "object") {
-        for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-            if (key === "sid" && typeof child === "number") {
-                result.add(child);
-            } else {
-                collectSidsInto(child, result);
-            }
-        }
-    }
-}
+// `collectSids` (collect every numeric `sid` in a C3 JSON subtree, returning an
+// empty Set for null/undefined/non-object input) now lives in c3source.
+// Re-exported here so existing `./sidUtils` importers are unaffected.
+export { collectSids } from "c3source";

@@ -4,6 +4,7 @@ import {
   formatAction,
   normalizeLineEndings,
   generateFunctionName,
+  visitEvents,
 } from "c3source";
 import type {
   EventSheetEvent,
@@ -176,19 +177,6 @@ function formatGroup(
 }
 
 /**
- * Format a condition, prefixing `[DISABLED] ` when the condition has `disabled: true`
- * in source JSON. Mirrors the prefix convention already used by `formatAction` from
- * c3source for disabled actions. The `Condition` type in c3source does not declare a
- * `disabled` field even though C3 stores it at runtime, so the check is structural.
- */
-export function formatConditionWithDisabled(cond: Condition): string {
-  const disabled =
-    "disabled" in cond && (cond as Record<string, unknown>).disabled === true;
-  const condStr = formatCondition(cond);
-  return disabled ? `[DISABLED] ${condStr}` : condStr;
-}
-
-/**
  * Return a brief description of an action for the DSL coordinate index.
  * Much shorter than `formatAction` — just enough to identify the action type.
  */
@@ -256,7 +244,7 @@ function formatBlockLike(
 
   // Format conditions
   for (const cond of event.conditions) {
-    lines.push(`${indent}  when: ${formatConditionWithDisabled(cond)}`);
+    lines.push(`${indent}  when: ${formatCondition(cond)}`);
   }
 
   // Format actions
@@ -329,10 +317,10 @@ function formatBlock(
   counter.value++;
 
   const flags: string[] = [];
-  if ("isOrBlock" in event && (event as Record<string, unknown>).isOrBlock === true) {
+  if (event.isOrBlock === true) {
     flags.push("OR");
   }
-  if ("disabled" in event && (event as Record<string, unknown>).disabled === true) {
+  if (event.disabled === true) {
     flags.push("DISABLED");
   }
   const flagStr = flags.length > 0 ? ` [${flags.join(", ")}]` : "";
@@ -545,20 +533,19 @@ export interface SidMapEntry {
  */
 export function buildShallowSidMap(sheet: EventSheet): SidMapEntry[] {
   const entries: SidMapEntry[] = [];
-  // Shared counter incremented in walk() for every counter-bearing eventType
-  // (group, block, function-block, custom-ace-block) — mirrors formatBlockLike's
-  // EventCounter so the synthetic script function name embedded by formatAction
-  // (e.g. `Sheet_Event2_Act1`) matches what extractScriptsFromSheet emits.
-  const counter: EventCounter = { value: 0 };
 
-  function summarize(event: BlockEvent | FunctionBlockEvent | CustomAceBlockEvent): string {
+  // visitEvents assigns each counting event (group / block / function-block /
+  // custom-ace-block) the same 1-based eventNumber extractScriptsFromSheet uses,
+  // so the synthetic script function name embedded by formatAction (e.g.
+  // `Sheet_Event2_Act1`) matches what the DSL extractor emits.
+  function summarize(event: BlockEvent | FunctionBlockEvent | CustomAceBlockEvent, eventNumber: number): string {
     const parts: string[] = [];
     // Defensive `?? []`: c3source types both arrays as required, but read-event-sids
     // parses untrusted source JSON without runtime validation — a hand-edited or
     // legacy sheet with a missing array previously fell through here harmlessly
     // because the shallow map didn't touch them.
     for (const cond of event.conditions ?? []) {
-      parts.push(formatConditionWithDisabled(cond));
+      parts.push(formatCondition(cond));
     }
     const actions = event.actions ?? [];
     for (let i = 0; i < actions.length; i++) {
@@ -566,113 +553,89 @@ export function buildShallowSidMap(sheet: EventSheet): SidMapEntry[] {
       // values, [DISABLED] prefix, [behaviorType] segment, and full (untruncated)
       // comment/script text — the original gap report's `grep=BattleLayout` query
       // is an action parameter value and would silently fail with describeAction.
-      parts.push(formatAction(actions[i], sheet.name, counter.value, i + 1));
+      parts.push(formatAction(actions[i], sheet.name, eventNumber, i + 1));
     }
     // Newline keeps tokens from fusing across boundaries; searchText is grep-only
     // (never displayed) so the separator choice is purely a regex concern.
     return parts.join("\n");
   }
 
-  function walk(events: EventSheet["events"], basePath: string): void {
-    for (let i = 0; i < events.length; i++) {
-      const event = events[i];
-      const jsonPath = `${basePath}[${i}]`;
+  visitEvents(sheet.events, (event, ctx) => {
+    const { jsonPath } = ctx;
 
-      switch (event.eventType) {
-        case "include":
-          entries.push({
-            jsonPath,
-            sid: undefined,
-            description: `include ${event.includeSheet}`,
-            searchText: "",
-          });
-          break;
+    switch (event.eventType) {
+      case "include":
+        entries.push({
+          jsonPath,
+          sid: undefined,
+          description: `include ${event.includeSheet}`,
+          searchText: "",
+        });
+        break;
 
-        case "comment": {
-          const commentLines = normalizeLineEndings(event.text).split("\n");
-          const firstLine = commentLines[0];
-          const desc = commentLines.length > 1 ? `// ${firstLine}...` : `// ${firstLine}`;
-          entries.push({ jsonPath, sid: undefined, description: desc, searchText: "" });
-          break;
-        }
-
-        case "variable":
-          entries.push({
-            jsonPath,
-            sid: event.sid,
-            description: formatVariableDescription(event),
-            searchText: "",
-          });
-          break;
-
-        case "group": {
-          // formatGroup increments the counter; mirror so summarize's
-          // sibling block sees the same eventIndex the DSL extractor uses.
-          counter.value++;
-          entries.push({
-            jsonPath,
-            sid: event.sid,
-            description: `group "${event.title}"`,
-            searchText: "",
-          });
-          if (event.children) {
-            walk(event.children, `${jsonPath}.children`);
-          }
-          break;
-        }
-
-        case "block": {
-          counter.value++; // mirror formatBlock
-          const flags: string[] = [];
-          if ("isOrBlock" in event && (event as Record<string, unknown>).isOrBlock === true) {
-            flags.push("OR");
-          }
-          if ("disabled" in event && (event as Record<string, unknown>).disabled === true) {
-            flags.push("DISABLED");
-          }
-          const flagStr = flags.length > 0 ? ` [${flags.join(", ")}]` : "";
-          entries.push({
-            jsonPath,
-            sid: event.sid,
-            description: `block${flagStr}`,
-            searchText: summarize(event),
-          });
-          if (event.children && event.children.length > 0) {
-            walk(event.children, `${jsonPath}.children`);
-          }
-          break;
-        }
-
-        case "function-block":
-          counter.value++; // mirror formatFunctionBlock
-          entries.push({
-            jsonPath,
-            sid: event.sid,
-            description: `function "${event.functionName}"`,
-            searchText: summarize(event),
-          });
-          if (event.children && event.children.length > 0) {
-            walk(event.children, `${jsonPath}.children`);
-          }
-          break;
-
-        case "custom-ace-block":
-          counter.value++; // mirror formatCustomAceBlock
-          entries.push({
-            jsonPath,
-            sid: event.sid,
-            description: `ace "${event.objectClass}.${event.aceName}"`,
-            searchText: summarize(event),
-          });
-          if (event.children && event.children.length > 0) {
-            walk(event.children, `${jsonPath}.children`);
-          }
-          break;
+      case "comment": {
+        const commentLines = normalizeLineEndings(event.text).split("\n");
+        const firstLine = commentLines[0];
+        const desc = commentLines.length > 1 ? `// ${firstLine}...` : `// ${firstLine}`;
+        entries.push({ jsonPath, sid: undefined, description: desc, searchText: "" });
+        break;
       }
-    }
-  }
 
-  walk(sheet.events, "events");
+      case "variable":
+        entries.push({
+          jsonPath,
+          sid: event.sid,
+          description: formatVariableDescription(event),
+          searchText: "",
+        });
+        break;
+
+      case "group":
+        entries.push({
+          jsonPath,
+          sid: event.sid,
+          description: `group "${event.title}"`,
+          searchText: "",
+        });
+        break;
+
+      case "block": {
+        const flags: string[] = [];
+        if (event.isOrBlock === true) {
+          flags.push("OR");
+        }
+        if (event.disabled === true) {
+          flags.push("DISABLED");
+        }
+        const flagStr = flags.length > 0 ? ` [${flags.join(", ")}]` : "";
+        entries.push({
+          jsonPath,
+          sid: event.sid,
+          description: `block${flagStr}`,
+          searchText: summarize(event, ctx.eventNumber ?? 0),
+        });
+        break;
+      }
+
+      case "function-block":
+        entries.push({
+          jsonPath,
+          sid: event.sid,
+          description: `function "${event.functionName}"`,
+          searchText: summarize(event, ctx.eventNumber ?? 0),
+        });
+        break;
+
+      case "custom-ace-block":
+        entries.push({
+          jsonPath,
+          sid: event.sid,
+          description: `ace "${event.objectClass}.${event.aceName}"`,
+          searchText: summarize(event, ctx.eventNumber ?? 0),
+        });
+        break;
+    }
+  });
   return entries;
 }
 

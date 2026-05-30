@@ -12,9 +12,11 @@ import type {
   FunctionParameter,
   ScriptAction,
 } from "c3source";
+import { isScriptAction, hasActions, hasConditions, canHaveChildren, visitEvents } from "c3source";
 import type { SidGenerator } from "./sidUtils.js";
 
 export type { ScriptAction, IncludeEvent, CommentEvent } from "c3source";
+export { hasActions, canHaveChildren };
 
 /** Entry in the SID-based event index. */
 export interface SidIndexEntry {
@@ -38,22 +40,15 @@ export type SidIndex = Map<number, SidIndexEntry>;
 export function buildSidIndex(sheet: EventSheet): SidIndex {
   const index: SidIndex = new Map();
 
-  function walk(events: EventSheetEvent[], parentArray: EventSheetEvent[]): void {
-    for (let i = 0; i < events.length; i++) {
-      const event = events[i];
-      if ("sid" in event && typeof event.sid === "number") {
-        if (index.has(event.sid)) {
-          throw new Error(`Duplicate SID ${event.sid} found in event sheet "${sheet.name}"`);
-        }
-        index.set(event.sid, { node: event, parentArray, indexInParent: i });
+  visitEvents(sheet.events, (event, ctx) => {
+    if ("sid" in event && typeof event.sid === "number") {
+      if (index.has(event.sid)) {
+        throw new Error(`Duplicate SID ${event.sid} found in event sheet "${sheet.name}"`);
       }
-      if ("children" in event && Array.isArray(event.children)) {
-        walk(event.children, event.children);
-      }
+      index.set(event.sid, { node: event, parentArray: ctx.parent, indexInParent: ctx.index });
     }
-  }
+  });
 
-  walk(sheet.events, sheet.events);
   return index;
 }
 
@@ -121,7 +116,7 @@ export function resolveNode(sheet: EventSheet, jsonPath: string): EventSheetEven
     node = current[index];
 
     if (i < segments.length - 1) {
-      if (!("children" in node) || !hasChildren(node)) {
+      if (!("children" in node) || !canHaveChildren(node)) {
         throw new Error(`Cannot get children of '${node.eventType}' event at "${segments.slice(0, i + 1).join(".")}" in "${jsonPath}"`);
       }
       if (!node.children) {
@@ -134,33 +129,6 @@ export function resolveNode(sheet: EventSheet, jsonPath: string): EventSheetEven
   return node!;
 }
 
-type EventWithChildren = BlockEvent | FunctionBlockEvent | CustomAceBlockEvent | GroupEvent;
-
-export function hasChildren(event: EventSheetEvent): event is EventSheetEvent & EventWithChildren {
-  return (
-    event.eventType === "block" ||
-    event.eventType === "function-block" ||
-    event.eventType === "custom-ace-block" ||
-    event.eventType === "group"
-  );
-}
-
-export function hasActions(event: EventSheetEvent): event is EventSheetEvent & { actions: (ScriptAction | Record<string, unknown>)[] } {
-  return (
-    event.eventType === "block" ||
-    event.eventType === "function-block" ||
-    event.eventType === "custom-ace-block"
-  );
-}
-
-function hasConditions(event: EventSheetEvent): event is EventSheetEvent & { conditions: Condition[] } {
-  return (
-    event.eventType === "block" ||
-    event.eventType === "function-block" ||
-    event.eventType === "custom-ace-block"
-  );
-}
-
 function getEventsArray(sheet: EventSheet, jsonPath: string): EventSheetEvent[] {
   if (jsonPath === "") {
     return sheet.events;
@@ -168,7 +136,7 @@ function getEventsArray(sheet: EventSheet, jsonPath: string): EventSheetEvent[] 
 
   const node = resolveNode(sheet, jsonPath);
 
-  if (!hasChildren(node)) {
+  if (!canHaveChildren(node)) {
     throw new Error(
       `Cannot get children of '${node.eventType}' event — path must be a parent container (block/group/function-block), not a sibling node. For root-level insertions use path: "".`,
     );
@@ -641,13 +609,6 @@ export function walkScriptActionsInArray(events: EventSheetEvent[]): ScriptActio
  */
 export function walkScriptActions(sheet: EventSheet): ScriptAction[] {
   return walkScriptActionsInArray(sheet.events);
-}
-
-function isScriptAction(action: ScriptAction | Record<string, unknown>): action is ScriptAction {
-  return (
-    (action as ScriptAction).type === "script" &&
-    (action as ScriptAction).language === "typescript"
-  );
 }
 
 export function isStandardAction(action: C3Action): action is StandardAction {

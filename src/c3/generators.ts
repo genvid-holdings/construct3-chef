@@ -1,12 +1,4 @@
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  mkdirSync,
-  writeFileSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { cleanOwnedFiles } from "./fsUtils.js";
 import {
@@ -19,10 +11,11 @@ import {
   find_all_layouts_path,
   extractScriptsFromSheet,
   generateFunctionName,
+  formatCondition,
 } from "c3source";
-import { formatEventSheet, formatIndex, formatConditionWithDisabled } from "./dslFormatter.js";
+import { formatEventSheet, formatIndex } from "./dslFormatter.js";
 import { formatLayout, buildGlobalLayerMap, formatContainersFile } from "./layoutFormatter.js";
-import { type Logger } from "genvid-mcp-utils";
+import { walkFiles, type Logger } from "genvid-mcp-utils";
 export { type Logger } from "genvid-mcp-utils";
 
 // ─── Script extraction ───
@@ -213,7 +206,7 @@ function formatExtractedFile(
     );
 
     if (script.conditions.length > 0) {
-      const condStr = script.conditions.map(formatConditionWithDisabled).join(", ");
+      const condStr = script.conditions.map((c) => formatCondition(c)).join(", ");
       lines.push(`// Context: ${condStr}`);
     }
 
@@ -508,23 +501,7 @@ function rootLocationForFile(relativePath: string): string {
  * does not exist. Exported so other tooling (e.g. staleness checks) can reuse it.
  */
 export function findJsonFiles(dir: string): string[] {
-  const results: string[] = [];
-  if (!existsSync(dir)) return results;
-
-  function recurse(current: string) {
-    const entries = readdirSync(current);
-    for (const entry of entries) {
-      const full = path.join(current, entry);
-      if (statSync(full).isDirectory()) {
-        recurse(full);
-      } else if (entry.endsWith(".json")) {
-        results.push(full);
-      }
-    }
-  }
-
-  recurse(dir);
-  return results;
+  return walkFiles(dir, ".json");
 }
 
 export function generateSidRegistry(projectRoot: string, log: Logger = console.log): void {

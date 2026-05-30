@@ -1,6 +1,7 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { mintUniqueSid } from "./sidUtils.js";
+import { walkFiles } from "genvid-mcp-utils";
 
 // SID generation lives in ./sidUtils.js — `mintUniqueSid(existingSids)` enforces the
 // strict [1e14, 1e15) range with a 100-attempt collision cap. The historical local
@@ -11,16 +12,7 @@ import { mintUniqueSid } from "./sidUtils.js";
 
 /** Recursively collect all .json file paths under a directory */
 function findJsonFiles(dir: string): string[] {
-  const results: string[] = [];
-  for (const entry of readdirSync(dir).sort()) {
-    const full = path.join(dir, entry);
-    if (statSync(full).isDirectory()) {
-      results.push(...findJsonFiles(full));
-    } else if (entry.endsWith(".json")) {
-      results.push(full);
-    }
-  }
-  return results;
+  return walkFiles(dir, ".json");
 }
 
 // ─── SID collection from objectTypes ───

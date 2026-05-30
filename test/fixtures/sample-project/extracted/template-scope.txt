@@ -1,0 +1,7 @@
+# C3 Template Scope
+# Source: layouts/**/*.json
+# Templates are layout-bound — instances can only be created in the defining layout.
+# To use a template across layouts, define it in UI_ComponentsLayout.
+
+Templates Layout:
+  Sprite3

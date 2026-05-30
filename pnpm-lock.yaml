@@ -447,8 +447,8 @@ packages:
     engines: {node: '>= 0.8'}
 
   c3source@file:.packages/c3source.tgz:
-    resolution: {integrity: sha512-VPWllCiKjuFmrSoG+4YO/Q7lTQq2AYDzHjlCDy3N0OVMTg3YcZe9J9FZnk7efHCOsXBDDaU/32xE2q2sxSOgsA==, tarball: file:.packages/c3source.tgz}
-    version: 0.1.0
+    resolution: {integrity: sha512-ZISJ8NiXDSlAsBHKBkqqDNCRY9f+ZCj6QY5Z3IsDIQzGjXmXzyBH89cnj2C5uiza2MHSu7KwJgq0X23i5BIm6A==, tarball: file:.packages/c3source.tgz}
+    version: 0.3.0
     engines: {node: '>=22'}
 
   call-bind-apply-helpers@1.0.2:
@@ -734,8 +734,8 @@ packages:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
   genvid-mcp-utils@file:.packages/genvid-mcp-utils.tgz:
-    resolution: {integrity: sha512-je+aK4y5ZH39vXdzUGpWeFqgoG3OqwM+So8mLjmhEH0+NiAVRD2gTsQXYhJhbLz9l5AamDbiNewJDHJOlJJFPw==, tarball: file:.packages/genvid-mcp-utils.tgz}
-    version: 0.1.0
+    resolution: {integrity: sha512-Q7V0hNhsHXrREja2bPy19gR1ItVpfEzrjqG2JlV1s6z6Tn/3Y4SVRTmy/2xtBe97lVTkH0qziQf8unBCx7xSDA==, tarball: file:.packages/genvid-mcp-utils.tgz}
+    version: 0.2.0
     engines: {node: '>=22'}
 
   get-caller-file@2.0.5:

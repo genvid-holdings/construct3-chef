@@ -4,6 +4,7 @@
  */
 
 import type { SidGenerator } from "./sidUtils.js";
+import { escapeRegExp } from "genvid-mcp-utils";
 
 export interface InstVarDef {
   name: string;
@@ -140,10 +141,6 @@ export function addInstVarsToLayout(layout: LayoutJson, typeName: string, newVar
  * If it has one, appends new fields.
  * Returns null if the class was not found.
  */
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function addInstVarsToTypesDts(
   content: string,
   typeName: string,

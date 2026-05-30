@@ -204,13 +204,11 @@ function formatChildTreeLines(children: ChildTree[], indent: string): string[] {
 }
 
 function isOverriden(layer: Layer): boolean {
-  return (layer as Record<string, unknown>).overriden === 1;
+  return layer.overriden === 1;
 }
 
 function getSubLayers(layer: Layer): Layer[] {
-  // JSON uses "subLayers" (camelCase) but the TS interface has "sublayers" (lowercase).
-  // Access via the index signature to match the actual JSON key.
-  return ((layer as Record<string, unknown>).subLayers as Layer[] | undefined) ?? [];
+  return layer.subLayers ?? [];
 }
 
 function getTags(inst: Instance): string | undefined {
@@ -218,12 +216,11 @@ function getTags(inst: Instance): string | undefined {
 }
 
 function getLayoutEventSheet(layout: Layout): string | undefined {
-  return (layout as Record<string, unknown>).eventSheet as string | undefined;
+  return layout.eventSheet;
 }
 
 function getLayoutSize(layout: Layout): { width: number; height: number } | undefined {
-  const width = (layout as Record<string, unknown>).width as number | undefined;
-  const height = (layout as Record<string, unknown>).height as number | undefined;
+  const { width, height } = layout;
   if (width != null && height != null) return { width, height };
   return undefined;
 }

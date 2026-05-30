@@ -1,0 +1,17 @@
+# Main Layout
+# Source: layouts/Main Layout.json
+# EventSheet: Event sheet 1
+# Size: 960 x 1280
+
+## Layers (2)
+
+layer 0 (3 instances)
+  9patch x1
+  Sprite3 x1
+
+global layer (overriden) [→ Second Layout]
+
+## Non-world Instances (1)
+
+  JSON x1
+

@@ -29,6 +29,11 @@ pnpm build                              # tsc → dist/, then prepends a node sh
 
 There is no dev script for the CLI. Run it in-place with `pnpm exec tsx src/cli.ts <subcommand> --project-dir <path>` (no build needed — `main`/`exports` point at the `.ts` sources and the project runs through tsx). The `construct3-chef` bin only exists after `pnpm build` (it points at `dist/cli.js`).
 
+**Golden test.** `test/c3/sampleProjectGolden.test.ts` regenerates `extracted/` from the real-project fixture `test/fixtures/sample-project/` and diffs it against the committed golden (`…/extracted/`), guarding the generate→`extracted/` pipeline (esp. layout-summary `fullLayerName`/global composition + DSL coordinates). When a generator change *intentionally* alters output, regenerate the golden:
+```bash
+pnpm exec tsx src/cli.ts generate --project-dir test/fixtures/sample-project
+```
+
 ## Dependency bootstrap (important — install will fail without this)
 
 `c3source` and `genvid-mcp-utils` are private Genvid packages, **not on npm**. `package.json` references them as `file:.packages/*.tgz`. Those tarballs are not in git (`.gitignore` excludes `.packages/`); fetch them first:
@@ -72,11 +77,11 @@ The recipe reference (all event-sheet + layout ops, SID addressing, builder shor
 
 The CLI is stateless; the server adds a concurrency layer worth understanding before editing it:
 
-- **`txId`** — increments on every source-file mutation. Optimistic concurrency: read tools / `validate-recipe` return the current `txId`; `apply-recipe` / `sync-project` accept an expected `txId` and reject if it has moved.
-- **`extractedDirty`** — true when source has changed since the last regenerate; read tools append a stale warning and `checkSourceFreshness` flips it by comparing mtimes.
-- **File watchers** on source dirs bump `txId`/`extractedDirty` on *external* edits. Self-induced writes are masked via `ExpectedChanges.add(...)` and `suppressWatcherDepth++` around the write — when editing a mutate tool, you must register expected writes and bump the suppress depth or the watcher will spuriously mark state dirty.
+- **`txId`** — the `OptimisticWatcher`'s monotonic counter (`watcher.txId`, incremented via `watcher.bump()`) — bumped on every source-file mutation. Optimistic concurrency: read tools / `validate-recipe` return the current `txId`; `apply-recipe` / `sync-project` accept an expected `txId` and reject if it has moved.
+- **`extractedDirty`** — true when source has changed since the last regenerate; read tools append a stale warning and `checkSourceFreshness` flips it by comparing mtimes. Stays module-level (project-specific); set from the watcher's `onSourceChange` callback.
+- **File watchers** — `createSourceWatcher` (`src/mcp/sourceWatcher.ts`) wires genvid-mcp-utils' `OptimisticWatcher` over the source dirs + `project.c3proj`. External source edits bump `txId` and set `extractedDirty` (via `onSourceChange`); `project.c3proj` edits bump `txId` only. Self-induced writes are masked by wrapping them in `watcher.suppress(async () => { … })` (synchronous suppress window) plus `watcher.expect(absPath)` for paths whose watcher event may land after the window closes — when editing a mutate tool, wrap its writes in `suppress` (and `expect()` anything written outside that call) or the watcher will spuriously mark state dirty.
 - **`ReadWriteLock`** serializes writes, allows concurrent reads. Tools are tagged `READ_ONLY` / `REGENERATE` / `MUTATE` annotations.
-- `CancelledError` paths still bump `txId` and set `extractedDirty` because source was already written before regeneration was interrupted.
+- `CancelledError` paths still bump `txId` (`watcher.bump()`) and set `extractedDirty` because source was already written before regeneration was interrupted.
 
 ## Conventions
 

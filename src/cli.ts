@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, copyFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
+import { walkFiles, toPosixPath } from "genvid-mcp-utils";
 import {
   extractScripts,
   generateDSL,
@@ -340,30 +341,20 @@ yargs(hideBin(process.argv))
       const MAX_MATCHES = 1000;
       let truncated = false;
 
-      function walkSearch(dir: string) {
-        if (!existsSync(dir) || truncated) return;
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          if (truncated) break;
-          const full = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            walkSearch(full);
-          } else if (entry.name.endsWith(ext)) {
-            const rel = path.relative(extractedDir, full).replace(/\\/g, "/");
-            const content = readFileSync(full, "utf-8").split("\n");
-            for (let i = 0; i < content.length; i++) {
-              if (regex.test(content[i])) {
-                lines.push(`${rel}:${i + 1}: ${content[i]}`);
-                if (lines.length >= MAX_MATCHES) {
-                  truncated = true;
-                  break;
-                }
-              }
+      for (const full of walkFiles(searchDir, ext)) {
+        if (truncated) break;
+        const rel = toPosixPath(path.relative(extractedDir, full));
+        const content = readFileSync(full, "utf-8").split("\n");
+        for (let i = 0; i < content.length; i++) {
+          if (regex.test(content[i])) {
+            lines.push(`${rel}:${i + 1}: ${content[i]}`);
+            if (lines.length >= MAX_MATCHES) {
+              truncated = true;
+              break;
             }
           }
         }
       }
-
-      walkSearch(searchDir);
       if (lines.length === 0) {
         console.log(`No matches found for pattern: ${argv.pattern}`);
       } else {

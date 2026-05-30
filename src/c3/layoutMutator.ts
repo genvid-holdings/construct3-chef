@@ -1,5 +1,7 @@
 // Layout mutation library — pure functions, no file I/O.
 
+import { makeDefaultLayer, addSceneGraphRoot, removeSceneGraphRoot, type Layout } from "c3source";
+
 export type LayoutJson = Record<string, unknown>;
 export type LayerJson = Record<string, unknown>;
 export type InstanceJson = Record<string, unknown>;
@@ -89,33 +91,14 @@ function removeLayerFromList(layers: LayerJson[], target: LayerJson): boolean {
 }
 
 /**
- * Build a full C3 layer structure with all required fields.
+ * Build a full C3 layer structure with all required fields. Delegates to
+ * c3source's makeDefaultLayer — the canonical default-layer schema, sourced
+ * from a real C3 export. Note this defaults to a white, opaque layer with
+ * `sampling: "auto"` (the older hand-rolled values were gray/transparent and
+ * omitted sampling).
  */
 export function buildLayer(name: string): LayerJson {
-  return {
-    name,
-    overriden: 0,
-    subLayers: [],
-    instances: [],
-    sid: 0,
-    effectTypes: [],
-    isInitiallyVisible: true,
-    isInitiallyInteractive: true,
-    isHTMLElementsLayer: false,
-    color: [1, 1, 1, 1],
-    backgroundColor: [0.369, 0.369, 0.369, 1],
-    isTransparent: true,
-    parallaxX: 1,
-    parallaxY: 1,
-    scaleRate: 1,
-    forceOwnTexture: false,
-    renderingMode: "3d",
-    drawOrder: "z-order",
-    useRenderCells: false,
-    blendMode: "normal",
-    zElevation: 0,
-    global: false,
-  };
+  return makeDefaultLayer(name);
 }
 
 /**
@@ -512,15 +495,10 @@ export function copyInstance(opts: {
     childInstances.push(child);
   }
 
-  // 11. Register root's new SID in scene-graphs-folder-root
+  // 11. Register root's new SID in scene-graphs-folder-root (addSceneGraphRoot
+  // creates the folder if the layout lacks one — it owns that invariant).
   const newRootSid = rootClone.sid as number;
-  const sceneGraphsFolder = (opts.targetLayout as Record<string, unknown>)[
-    "scene-graphs-folder-root"
-  ] as Record<string, unknown> | undefined;
-  if (sceneGraphsFolder) {
-    const items = sceneGraphsFolder.items as Array<Record<string, unknown>>;
-    items.push({ sid: newRootSid });
-  }
+  addSceneGraphRoot(opts.targetLayout as unknown as Layout, newRootSid);
 }
 
 // ---------------------------------------------------------------------------
@@ -801,16 +779,7 @@ export function removeInstance(layout: LayoutJson, typeName: string, layer?: str
   }
 
   // 5. Remove root's SID from scene-graphs-folder-root.items
-  const sceneGraphsFolder = (layout as Record<string, unknown>)[
-    "scene-graphs-folder-root"
-  ] as Record<string, unknown> | undefined;
-  if (sceneGraphsFolder) {
-    const items = sceneGraphsFolder.items as Array<Record<string, unknown>>;
-    const sidIdx = items.findIndex((item) => item.sid === rootSid);
-    if (sidIdx !== -1) {
-      items.splice(sidIdx, 1);
-    }
-  }
+  removeSceneGraphRoot(layout as unknown as Layout, rootSid);
 }
 
 // ---------------------------------------------------------------------------
@@ -865,16 +834,7 @@ export function moveInstance(opts: {
   }
 
   // 4. Remove original's SID from scene-graphs-folder-root.items
-  const sceneGraphsFolder = (opts.layout as Record<string, unknown>)[
-    "scene-graphs-folder-root"
-  ] as Record<string, unknown> | undefined;
-  if (sceneGraphsFolder) {
-    const items = sceneGraphsFolder.items as Array<Record<string, unknown>>;
-    const sidIdx = items.findIndex((item) => item.sid === originalSid);
-    if (sidIdx !== -1) {
-      items.splice(sidIdx, 1);
-    }
-  }
+  removeSceneGraphRoot(opts.layout as unknown as Layout, originalSid);
 }
 
 // ---------------------------------------------------------------------------

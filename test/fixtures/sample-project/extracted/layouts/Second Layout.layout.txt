@@ -1,0 +1,27 @@
+# Second Layout
+# Source: layouts/Second Layout.json
+# EventSheet: Event sheet 2
+# Size: 960 x 1280
+
+## Layers (3)
+
+layer 0 (1 instance)
+  TextInput x1
+
+global layer (global)
+  global layer > sublayer g.1
+    global layer > sublayer g.1 > subsublayer g.1.1 (1 instance)
+      Sprite2 x1
+
+
+  global layer > sublayer g.2 (1 instance)
+    Sprite x1
+
+
+layer 1
+  layer 1 > sublayer 1.1
+    layer 1 > sublayer 1.1 > sublayer 1.1.1 (1 instance)
+      Text x1
+
+
+

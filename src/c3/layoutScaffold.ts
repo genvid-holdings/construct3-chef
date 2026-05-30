@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { find_all_layouts_path } from "c3source";
+import { find_all_layouts_path, remapInstanceIds, type Instance } from "c3source";
 import { mintUniqueSid } from "./sidUtils.js";
 
 // SID generation moved to ./sidUtils.js — use `mintUniqueSid(usedSids)` (strict range
@@ -134,37 +134,11 @@ export function collectLayoutSids(layout: Record<string, unknown>): Set<number> 
 
 // ─── Remapping helpers ───
 
+// Thin wrapper over c3source's remapInstanceIds, which owns the C3 id-remap
+// rules (uid; sid + mirrored instanceFolderItem.sid; sceneGraphData uid /
+// parent-uid (kept at -1 for roots) / children[].uid).
 function remapInstanceInPlace(instance: Record<string, unknown>, uidMap: Map<number, number>, sidMap: Map<number, number>): void {
-  if (typeof instance.uid === "number") {
-    instance.uid = uidMap.get(instance.uid) ?? instance.uid;
-  }
-  if (typeof instance.sid === "number") {
-    const newSid = sidMap.get(instance.sid) ?? instance.sid;
-    instance.sid = newSid;
-    // instanceFolderItem.sid mirrors instance.sid
-    const folderItem = instance.instanceFolderItem as Record<string, unknown> | undefined;
-    if (folderItem && typeof folderItem.sid === "number") {
-      folderItem.sid = newSid;
-    }
-  }
-  const sgd = instance.sceneGraphData as Record<string, unknown> | undefined;
-  if (sgd) {
-    if (typeof sgd.uid === "number") {
-      sgd.uid = uidMap.get(sgd.uid) ?? sgd.uid;
-    }
-    const parentUid = sgd["parent-uid"];
-    if (typeof parentUid === "number") {
-      sgd["parent-uid"] = uidMap.get(parentUid) ?? parentUid;
-    }
-    const children = sgd.children as Array<Record<string, unknown>> | undefined;
-    if (children) {
-      for (const child of children) {
-        if (typeof child.uid === "number") {
-          child.uid = uidMap.get(child.uid) ?? child.uid;
-        }
-      }
-    }
-  }
+  remapInstanceIds(instance as unknown as Instance, uidMap, sidMap);
 }
 
 function remapLayerInPlace(layer: Record<string, unknown>, uidMap: Map<number, number>, sidMap: Map<number, number>): void {

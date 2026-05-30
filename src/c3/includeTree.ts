@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { EventSheet, FunctionBlockEvent, CustomAceBlockEvent } from "c3source";
+import type { EventSheet } from "c3source";
+import { visitEvents } from "c3source";
 
 export interface IncludeTreeNode {
   /** Sheet name (e.g., "CommonEvents") */
@@ -38,26 +39,20 @@ export function buildSheetNameMap(projectDir: string): Map<string, string> {
 }
 
 /**
- * Extract function names from an eventSheet's events array.
- * Walks top-level and group children to find function-block and custom-ace-block events.
+ * Extract function names from an eventSheet's events array, via c3source's
+ * canonical event walk: function-block → its name; custom-ace-block →
+ * "ObjectClass.AceName". visitEvents descends every child-bearing event (not
+ * only groups), so this is a strict superset of the old groups-only walk.
  */
 export function extractFunctions(events: EventSheet["events"]): string[] {
   const functions: string[] = [];
-
-  function walk(evts: EventSheet["events"]): void {
-    for (const event of evts) {
-      if (event.eventType === "function-block") {
-        functions.push((event as FunctionBlockEvent).functionName);
-      } else if (event.eventType === "custom-ace-block") {
-        const ace = event as CustomAceBlockEvent;
-        functions.push(`${ace.objectClass}.${ace.aceName}`);
-      } else if (event.eventType === "group" && event.children) {
-        walk(event.children);
-      }
+  visitEvents(events, (event) => {
+    if (event.eventType === "function-block") {
+      functions.push(event.functionName);
+    } else if (event.eventType === "custom-ace-block") {
+      functions.push(`${event.objectClass}.${event.aceName}`);
     }
-  }
-
-  walk(events);
+  });
   return functions;
 }
 

@@ -29,6 +29,11 @@ pnpm build                              # tsc → dist/, then prepends a node sh
 
 There is no dev script for the CLI. Run it in-place with `pnpm exec tsx src/cli.ts <subcommand> --project-dir <path>` (no build needed — `main`/`exports` point at the `.ts` sources and the project runs through tsx). The `construct3-chef` bin only exists after `pnpm build` (it points at `dist/cli.js`).
 
+**Golden test.** `test/c3/sampleProjectGolden.test.ts` regenerates `extracted/` from the real-project fixture `test/fixtures/sample-project/` and diffs it against the committed golden (`…/extracted/`), guarding the generate→`extracted/` pipeline (esp. layout-summary `fullLayerName`/global composition + DSL coordinates). When a generator change *intentionally* alters output, regenerate the golden:
+```bash
+pnpm exec tsx src/cli.ts generate --project-dir test/fixtures/sample-project
+```
+
 ## Dependency bootstrap (important — install will fail without this)
 
 `c3source` and `genvid-mcp-utils` are private Genvid packages, **not on npm**. `package.json` references them as `file:.packages/*.tgz`. Those tarballs are not in git (`.gitignore` excludes `.packages/`); fetch them first:

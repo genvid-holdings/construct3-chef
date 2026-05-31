@@ -1,7 +1,20 @@
 import { describe, it } from "mocha";
 import { assert } from "chai";
-import { formatLayout, buildGlobalLayerMap, formatContainersFile } from "../../src/c3/layoutFormatter.js";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  formatLayout,
+  buildGlobalLayerMap,
+  formatContainersFile,
+  countInstancesDeep,
+  buildGlobalLayerReport,
+  formatGlobalLayers,
+} from "../../src/c3/layoutFormatter.js";
 import type { Layout, Layer, Instance } from "@genvid/c3source";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FIXTURE_LAYOUTS_DIR = path.join(__dirname, "../fixtures/sample-project/layouts");
 
 let nextUid = 1;
 
@@ -586,6 +599,154 @@ describe("layoutFormatter", () => {
       ];
       const map = buildGlobalLayerMap(layouts);
       assert.equal(map.size, 0);
+    });
+  });
+
+  describe("countInstancesDeep", () => {
+    it("should count instances on the layer itself", () => {
+      const l = layer("Main", [inst("Sprite"), inst("Text")]);
+      assert.equal(countInstancesDeep(l), 2);
+    });
+
+    it("should count instances in sublayers recursively", () => {
+      const sub1 = layer("Sub1", [inst("A")]);
+      const sub2 = layer("Sub2", [inst("B"), inst("C")]);
+      const parent = layer("Parent", [], { subLayers: [sub1, sub2] });
+      assert.equal(countInstancesDeep(parent), 3);
+    });
+
+    it("should count instances at all levels combined", () => {
+      const grandchild = layer("GC", [inst("Sprite2")]);
+      const child = layer("Child", [], { subLayers: [grandchild] });
+      const parent = layer("Parent", [inst("Sprite")], { subLayers: [child] });
+      assert.equal(countInstancesDeep(parent), 2);
+    });
+
+    it("should return 0 for empty layer with no sublayers", () => {
+      const l = layer("Empty");
+      assert.equal(countInstancesDeep(l), 0);
+    });
+  });
+
+  describe("buildGlobalLayerReport", () => {
+    it("should return the correct report entry for the sample-project fixture", () => {
+      const mainLayoutJson = readFileSync(path.join(FIXTURE_LAYOUTS_DIR, "Main Layout.json"), "utf-8");
+      const secondLayoutJson = readFileSync(path.join(FIXTURE_LAYOUTS_DIR, "Second Layout.json"), "utf-8");
+      const parsedLayouts = [
+        { layout: JSON.parse(secondLayoutJson) as Layout },
+        { layout: JSON.parse(mainLayoutJson) as Layout },
+      ];
+      const reports = buildGlobalLayerReport(parsedLayouts);
+      assert.equal(reports.length, 1);
+      const r = reports[0];
+      assert.equal(r.name, "global layer");
+      assert.equal(r.sourceLayout, "Second Layout");
+      assert.deepEqual(r.overridingLayouts, ["Main Layout"]);
+      assert.equal(r.instanceCount, 2);
+      assert.isUndefined(r.multiSourceWarning);
+    });
+
+    it("should set multiSourceWarning when the same layer name sources from multiple layouts", () => {
+      const layouts = [
+        {
+          layout: layout("LayoutA", [layer("SharedGlobal", [inst("Sprite")], { global: true })]),
+        },
+        {
+          layout: layout("LayoutB", [layer("SharedGlobal", [inst("Text")], { global: true })]),
+        },
+      ];
+      const reports = buildGlobalLayerReport(layouts);
+      assert.equal(reports.length, 1);
+      const r = reports[0];
+      assert.isDefined(r.multiSourceWarning);
+      assert.include(r.multiSourceWarning!, "[WARNING:");
+      assert.include(r.multiSourceWarning!, '"LayoutA"');
+      assert.include(r.multiSourceWarning!, '"LayoutB"');
+    });
+
+    it("should sort reports by layer name", () => {
+      const layouts = [
+        {
+          layout: layout("LayoutA", [
+            layer("ZLayer", [inst("Sprite")], { global: true }),
+            layer("ALayer", [inst("Text")], { global: true }),
+          ]),
+        },
+      ];
+      const reports = buildGlobalLayerReport(layouts);
+      assert.equal(reports[0].name, "ALayer");
+      assert.equal(reports[1].name, "ZLayer");
+    });
+
+    it("should collect overriding layouts into sorted array", () => {
+      const layouts = [
+        {
+          layout: layout("Source", [layer("HUD", [inst("Score")], { global: true })]),
+        },
+        {
+          layout: layout("LayoutZ", [layer("HUD", [], { global: true, overriden: 1 })]),
+        },
+        {
+          layout: layout("LayoutA", [layer("HUD", [], { global: true, overriden: 1 })]),
+        },
+      ];
+      const reports = buildGlobalLayerReport(layouts);
+      assert.equal(reports.length, 1);
+      assert.deepEqual(reports[0].overridingLayouts, ["LayoutA", "LayoutZ"]);
+    });
+  });
+
+  describe("formatGlobalLayers", () => {
+    it("should return a message when reports array is empty", () => {
+      const result = formatGlobalLayers([]);
+      assert.include(result, "(no global layers found)");
+      assert.match(result, /\n$/);
+    });
+
+    it("should render layer name, source layout, overriding layouts, and instance count", () => {
+      const reports = [
+        {
+          name: "global layer",
+          sourceLayout: "Second Layout",
+          overridingLayouts: ["Main Layout"],
+          instanceCount: 2,
+        },
+      ];
+      const result = formatGlobalLayers(reports);
+      assert.include(result, "global layer");
+      assert.include(result, "Second Layout");
+      assert.include(result, "Main Layout");
+      assert.include(result, "2");
+    });
+
+    it("should include multiSourceWarning text when present", () => {
+      const reports = [
+        {
+          name: "SharedGlobal",
+          sourceLayout: "LayoutA",
+          overridingLayouts: [],
+          instanceCount: 1,
+          multiSourceWarning:
+            '[WARNING: global layer "SharedGlobal" defined in multiple source layouts: "LayoutA", "LayoutB"]',
+        },
+      ];
+      const result = formatGlobalLayers(reports);
+      assert.include(result, "[WARNING:");
+    });
+
+    it("should have a trailing newline", () => {
+      const result = formatGlobalLayers([]);
+      assert.equal(result[result.length - 1], "\n");
+
+      const resultNonEmpty = formatGlobalLayers([
+        { name: "HUD", sourceLayout: "L1", overridingLayouts: [], instanceCount: 3 },
+      ]);
+      assert.equal(resultNonEmpty[resultNonEmpty.length - 1], "\n");
+    });
+
+    it("should include the # header comment block", () => {
+      const result = formatGlobalLayers([]);
+      assert.include(result, "# C3 Global Layers");
     });
   });
 });

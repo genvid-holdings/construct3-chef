@@ -7,9 +7,7 @@ import type { Layout, Layer, Instance } from "@genvid/c3source";
  * `overriden: 0`, and actual instances. Other layouts reference it via
  * `overriden: 1` (empty instances).
  */
-export function buildGlobalLayerMap(
-  layouts: Array<{ layout: Layout }>,
-): Map<string, string> {
+export function buildGlobalLayerMap(layouts: Array<{ layout: Layout }>): Map<string, string> {
   const map = new Map<string, string>();
 
   for (const { layout } of layouts) {
@@ -46,9 +44,7 @@ export function formatLayout(
 
   const layoutsIndex = sourcePath.replace(/\\/g, "/").indexOf("layouts/");
   const relPath =
-    layoutsIndex >= 0
-      ? sourcePath.replace(/\\/g, "/").slice(layoutsIndex)
-      : sourcePath.replace(/\\/g, "/");
+    layoutsIndex >= 0 ? sourcePath.replace(/\\/g, "/").slice(layoutsIndex) : sourcePath.replace(/\\/g, "/");
   lines.push(`# Source: ${relPath}`);
 
   const eventSheet = getLayoutEventSheet(layout);
@@ -165,10 +161,7 @@ interface ChildTree {
 }
 
 /** Recursively resolve child tree for a parent instance. */
-function resolveChildTree(
-  inst: Instance,
-  uidMap: Map<number, Instance>,
-): ChildTree[] {
+function resolveChildTree(inst: Instance, uidMap: Map<number, Instance>): ChildTree[] {
   const sgd = getSceneGraphData(inst);
   if (!sgd?.children) return [];
 
@@ -186,9 +179,7 @@ function resolveChildTree(
 
 /** Serialize a child tree to a canonical string for deduplication. */
 function treeSignature(children: ChildTree[]): string {
-  return children
-    .map((c) => `${c.type}(${treeSignature(c.children)})`)
-    .join(",");
+  return children.map((c) => `${c.type}(${treeSignature(c.children)})`).join(",");
 }
 
 /** Format tree lines for children, recursively handling multi-level. */
@@ -232,10 +223,7 @@ function hasInstances(layer: Layer): boolean {
   return getSubLayers(layer).some((sub) => hasInstances(sub));
 }
 
-function layerAnnotations(
-  layer: Layer,
-  globalLayerMap: Map<string, string>,
-): string {
+function layerAnnotations(layer: Layer, globalLayerMap: Map<string, string>): string {
   const parts: string[] = [];
 
   if (isOverriden(layer)) {
@@ -263,12 +251,7 @@ function countInstances(layer: Layer): number {
   return (layer.instances ?? []).length;
 }
 
-function formatLayer(
-  layer: Layer,
-  parentName: string | null,
-  indent: string,
-  ctx: LayoutFormatContext,
-): string[] {
+function formatLayer(layer: Layer, parentName: string | null, indent: string, ctx: LayoutFormatContext): string[] {
   const lines: string[] = [];
   const displayName = parentName ? `${parentName} > ${layer.name}` : layer.name;
   const annotation = layerAnnotations(layer, ctx.globalLayerMap);
@@ -323,9 +306,7 @@ function groupInstances(instances: Instance[], isTemplateHolder: boolean): Insta
   for (const inst of instances) {
     const template = inst.template as { templateName?: string } | undefined;
     const templateName = template?.templateName ?? null;
-    const groupKey = isTemplateHolder
-      ? `${inst.type}::${templateName ?? ""}`
-      : inst.type;
+    const groupKey = isTemplateHolder ? `${inst.type}::${templateName ?? ""}` : inst.type;
 
     const existing = groupMap.get(groupKey);
     if (existing) {
@@ -350,11 +331,7 @@ function groupInstances(instances: Instance[], isTemplateHolder: boolean): Insta
 }
 
 /** Format hierarchy lines for a group of parent instances. */
-function formatGroupHierarchy(
-  group: InstanceGroup,
-  uidMap: Map<number, Instance>,
-  indent: string,
-): string[] {
+function formatGroupHierarchy(group: InstanceGroup, uidMap: Map<number, Instance>, indent: string): string[] {
   // Skip hierarchy for template replicas (mode: "replica").
   // Template definitions (mode: "template") show full hierarchy regardless of layout folder.
   if (isReplicaGroup(group)) return [];
@@ -406,7 +383,10 @@ function mergeVarKeys(existing: string[], inst: Instance): void {
 function collectTags(inst: Instance): string[] {
   const tags = getTags(inst);
   if (!tags || tags.trim() === "") return [];
-  return tags.split(",").map((t) => t.trim()).filter(Boolean);
+  return tags
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
 }
 
 function mergeTags(existing: string[], inst: Instance): void {
@@ -450,13 +430,133 @@ function formatInstanceGroup(
   // Add container annotation with full group and presence markers
   const containerGroup = containerMap?.get(group.type);
   if (containerGroup) {
-    const formatted = containerGroup
-      .map((m) => (layoutTypes?.has(m) ? m : `~${m}`))
-      .join(", ");
+    const formatted = containerGroup.map((m) => (layoutTypes?.has(m) ? m : `~${m}`)).join(", ");
     parts.push(`(container: {${formatted}})`);
   }
 
   return parts.join(" ");
+}
+
+/**
+ * Recursively sum instance counts across a layer and all descendant sublayers.
+ */
+export function countInstancesDeep(layer: Layer): number {
+  let count = (layer.instances ?? []).length;
+  for (const sub of getSubLayers(layer)) {
+    count += countInstancesDeep(sub);
+  }
+  return count;
+}
+
+/**
+ * Report entry for a single global layer, aggregated across all layouts.
+ */
+export interface GlobalLayerReport {
+  /** Layer name (matches the C3 layer `name` field). */
+  name: string;
+  /** Name of the layout that defines (sources) this global layer. */
+  sourceLayout: string;
+  /** Names of layouts that override this global layer, sorted. */
+  overridingLayouts: string[];
+  /** Total instance count in the source layer, including all descendant sublayers. */
+  instanceCount: number;
+  /**
+   * Set when the same layer name qualifies as a source in more than one layout.
+   * Contains a human-readable warning string; do NOT emit a console.warn.
+   */
+  multiSourceWarning?: string;
+}
+
+/**
+ * Build a report of all global layers found across the given layouts.
+ *
+ * A layer is a "source" when `layer.global && !isOverriden(layer) && hasInstances(layer)`.
+ * A layer is "overriding" when `isOverriden(layer)` is true for the same layer name.
+ *
+ * Returns entries sorted by layer name.
+ */
+export function buildGlobalLayerReport(layouts: Array<{ layout: Layout }>): GlobalLayerReport[] {
+  // Map from layer name → { sourceLayout, sourceLayer, extraSources }
+  const sourceMap = new Map<string, { sourceLayout: string; sourceLayer: Layer; extraSources: string[] }>();
+  // Map from layer name → overriding layout names
+  const overrideMap = new Map<string, string[]>();
+
+  for (const { layout } of layouts) {
+    visitLayersRecursive(layout.layers, (layer) => {
+      if (layer.global && !isOverriden(layer) && hasInstances(layer)) {
+        const existing = sourceMap.get(layer.name);
+        if (existing) {
+          existing.extraSources.push(layout.name);
+        } else {
+          sourceMap.set(layer.name, {
+            sourceLayout: layout.name,
+            sourceLayer: layer,
+            extraSources: [],
+          });
+        }
+      }
+      if (isOverriden(layer)) {
+        const list = overrideMap.get(layer.name);
+        if (list) {
+          list.push(layout.name);
+        } else {
+          overrideMap.set(layer.name, [layout.name]);
+        }
+      }
+    });
+  }
+
+  const reports: GlobalLayerReport[] = [];
+  for (const [name, { sourceLayout, sourceLayer, extraSources }] of sourceMap) {
+    const overridingLayouts = (overrideMap.get(name) ?? []).slice().sort();
+    const instanceCount = countInstancesDeep(sourceLayer);
+    const report: GlobalLayerReport = {
+      name,
+      sourceLayout,
+      overridingLayouts,
+      instanceCount,
+    };
+    if (extraSources.length > 0) {
+      const allSources = [sourceLayout, ...extraSources].map((s) => `"${s}"`).join(", ");
+      report.multiSourceWarning = `[WARNING: global layer "${name}" defined in multiple source layouts: ${allSources}]`;
+    }
+    reports.push(report);
+  }
+
+  reports.sort((a, b) => a.name.localeCompare(b.name));
+  return reports;
+}
+
+/**
+ * Format a global-layers report into a human-readable text file.
+ *
+ * Follows the same `#`-header convention as formatContainersFile / template-scope.txt.
+ * Returns a string with a trailing newline.
+ */
+export function formatGlobalLayers(reports: GlobalLayerReport[]): string {
+  const lines: string[] = [
+    "# C3 Global Layers",
+    "# Source: layouts/**/*.json",
+    "# Global layers are shared across layouts; one layout defines instances, others override.",
+    "",
+  ];
+
+  if (reports.length === 0) {
+    lines.push("(no global layers found)");
+  } else {
+    for (const r of reports) {
+      const overriders = r.overridingLayouts.length > 0 ? r.overridingLayouts.join(", ") : "(none)";
+      lines.push(
+        `${r.name}: source="${r.sourceLayout}", overridingLayouts=[${overriders}], instanceCount=${r.instanceCount}`,
+      );
+      if (r.multiSourceWarning) {
+        lines.push(`  ${r.multiSourceWarning}`);
+      }
+    }
+  }
+
+  lines.push("");
+  return lines.join("\n");
 }
 
 /**

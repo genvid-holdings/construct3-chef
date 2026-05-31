@@ -1,4 +1,4 @@
-import type { Layout, Layer, Instance } from "c3source";
+import type { Layout, Layer, Instance } from "@genvid/c3source";
 
 /**
  * Build a map of global layer name → source layout name.

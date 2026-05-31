@@ -1,7 +1,7 @@
 import { describe, it } from "mocha";
 import { assert } from "chai";
 import { formatLayout, buildGlobalLayerMap, formatContainersFile } from "../../src/c3/layoutFormatter.js";
-import type { Layout, Layer, Instance } from "c3source";
+import type { Layout, Layer, Instance } from "@genvid/c3source";
 
 let nextUid = 1;
 

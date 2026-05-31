@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { OptimisticWatcher, type ExpectedChanges, type WatcherFactory, type Logger } from "genvid-mcp-utils";
+import { OptimisticWatcher, type ExpectedChanges, type WatcherFactory, type Logger } from "@genvid/mcp-utils";
 
 /** Source directories whose external edits invalidate extracted/ (mark it dirty). */
 export const SOURCE_DIRS = ["eventSheets", "layouts", "objectTypes", "families", "scripts"] as const;

@@ -12,11 +12,11 @@ import {
   extractScriptsFromSheet,
   generateFunctionName,
   formatCondition,
-} from "c3source";
+} from "@genvid/c3source";
 import { formatEventSheet, formatIndex } from "./dslFormatter.js";
 import { formatLayout, buildGlobalLayerMap, formatContainersFile } from "./layoutFormatter.js";
-import { walkFiles, type Logger } from "genvid-mcp-utils";
-export { type Logger } from "genvid-mcp-utils";
+import { walkFiles, type Logger } from "@genvid/mcp-utils";
+export { type Logger } from "@genvid/mcp-utils";
 
 // ─── Script extraction ───
 

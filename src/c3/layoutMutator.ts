@@ -1,6 +1,6 @@
 // Layout mutation library — pure functions, no file I/O.
 
-import { makeDefaultLayer, addSceneGraphRoot, removeSceneGraphRoot, type Layout } from "c3source";
+import { makeDefaultLayer, addSceneGraphRoot, removeSceneGraphRoot, type Layout } from "@genvid/c3source";
 
 export type LayoutJson = Record<string, unknown>;
 export type LayerJson = Record<string, unknown>;

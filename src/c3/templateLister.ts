@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { type Layer, type Layout, find_all_layouts_path } from "c3source";
+import { type Layer, type Layout, find_all_layouts_path } from "@genvid/c3source";
 
 function getSubLayers(layer: Layer): Layer[] {
   const raw = (layer as Record<string, unknown>).subLayers;

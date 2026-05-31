@@ -1,8 +1,9 @@
 node_modules/
 dist/
 *.tgz
-.packages/
 # This repo uses pnpm; the committed lockfile is pnpm-lock.yaml. Ignore npm's lockfile
 # so an accidental `npm install` doesn't litter the tree or get committed.
 package-lock.json
 tsconfig.tsbuildinfo
+# Local Claude Code settings + scheduler state (per-machine, not shared)
+.claude/

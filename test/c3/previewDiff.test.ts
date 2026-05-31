@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "mocha";
 import { assert } from "chai";
-import type { EventSheet, BlockEvent, EventSheetVariable } from "c3source";
+import type { EventSheet, BlockEvent, EventSheetVariable } from "@genvid/c3source";
 import { diffScripts } from "../../src/c3/previewDiff.js";
 import { buildBlock, buildScriptAction } from "../../src/c3/eventSheetMutator.js";
 import { freshSidGen, type SidGenerator } from "../../src/c3/sidUtils.js";

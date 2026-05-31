@@ -12,7 +12,7 @@ import {
   type CommentEvent,
   type EventSheetVariable,
   type EventSheet,
-} from "c3source";
+} from "@genvid/c3source";
 import {
   formatEvent,
   formatEventSheet,

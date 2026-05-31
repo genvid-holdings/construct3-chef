@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { EventSheet } from "c3source";
-import { visitEvents } from "c3source";
+import type { EventSheet } from "@genvid/c3source";
+import { visitEvents } from "@genvid/c3source";
 
 export interface IncludeTreeNode {
   /** Sheet name (e.g., "CommonEvents") */

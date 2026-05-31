@@ -20,8 +20,8 @@ import {
   REGENERATE,
   MUTATE,
   NON_IDEMPOTENT_READ,
-} from "genvid-mcp-utils";
-import type { Logger } from "genvid-mcp-utils";
+} from "@genvid/mcp-utils";
+import type { Logger } from "@genvid/mcp-utils";
 import { applyParsed } from "../c3/recipeApplier.js";
 import { validateRecipe, type Recipe } from "../c3/recipeInterpreter.js";
 import {
@@ -36,7 +36,7 @@ import {
 import { runSync } from "../c3/projectSync.js";
 import { readRegistryFile, mintUniqueSid } from "../c3/sidUtils.js";
 import { filterIndex, buildShallowSidMap } from "../c3/dslFormatter.js";
-import type { EventSheet } from "c3source";
+import type { EventSheet } from "@genvid/c3source";
 import { resolveIncludeTree, formatIncludeTree, flattenIncludeTree } from "../c3/includeTree.js";
 import { collectAllUids, cloneLayout } from "../c3/layoutScaffold.js";
 import { search } from "../c3/search.js";
@@ -69,7 +69,7 @@ let watcher!: OptimisticWatcher;
 const expectedChanges = new ExpectedChanges();
 
 // Tool annotation presets (READ_ONLY / REGENERATE / MUTATE / NON_IDEMPOTENT_READ)
-// are imported from genvid-mcp-utils. NON_IDEMPOTENT_READ marks tools that read
+// are imported from @genvid/mcp-utils. NON_IDEMPOTENT_READ marks tools that read
 // source only but return different output per call (e.g. random-SID minting) —
 // clients must NOT treat them as idempotent for retry/cache purposes.
 

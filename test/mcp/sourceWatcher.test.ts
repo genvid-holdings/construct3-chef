@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ExpectedChanges, type WatcherFactory } from "genvid-mcp-utils";
+import { ExpectedChanges, type WatcherFactory } from "@genvid/mcp-utils";
 import { createSourceWatcher } from "../../src/mcp/sourceWatcher.js";
 
 /**

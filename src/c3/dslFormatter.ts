@@ -5,7 +5,7 @@ import {
   normalizeLineEndings,
   generateFunctionName,
   visitEvents,
-} from "c3source";
+} from "@genvid/c3source";
 import type {
   EventSheetEvent,
   EventSheet,
@@ -16,7 +16,7 @@ import type {
   FunctionParameter,
   ScriptAction,
   Condition,
-} from "c3source";
+} from "@genvid/c3source";
 
 /**
  * Mutable counter object passed by reference so child events correctly

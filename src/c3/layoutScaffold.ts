@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { find_all_layouts_path, remapInstanceIds, type Instance } from "c3source";
+import { find_all_layouts_path, remapInstanceIds, type Instance } from "@genvid/c3source";
 import { mintUniqueSid } from "./sidUtils.js";
 
 // SID generation moved to ./sidUtils.js — use `mintUniqueSid(usedSids)` (strict range

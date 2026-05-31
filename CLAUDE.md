@@ -1,3 +1,5 @@
+@CONVENTIONS.md
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -18,7 +20,7 @@ construct3-chef mutates Construct 3 projects, which store their data as JSON fil
 This repo uses **pnpm** (committed `pnpm-lock.yaml`). Don't `npm install` — it produces a `package-lock.json` the repo ignores and may resolve a different dep graph.
 
 ```bash
-pnpm install                            # install deps (after download-deps; see below)
+pnpm install                            # install deps (fetches @genvid/* from npm)
 pnpm test                               # mocha + tsx + chai, all test/**/*.test.ts
 pnpm test --grep "foo"                  # run tests matching a name (pnpm forwards args; no `--`)
 pnpm test test/c3/sidUtils.test.ts      # run a single file
@@ -34,18 +36,12 @@ There is no dev script for the CLI. Run it in-place with `pnpm exec tsx src/cli.
 pnpm exec tsx src/cli.ts generate --project-dir test/fixtures/sample-project
 ```
 
-## Dependency bootstrap (important — install will fail without this)
+## Leaf dependencies
 
-`c3source` and `genvid-mcp-utils` are private Genvid packages, **not on npm**. `package.json` references them as `file:.packages/*.tgz`. Those tarballs are not in git (`.gitignore` excludes `.packages/`); fetch them first:
+`@genvid/c3source` and `@genvid/mcp-utils` are public Genvid packages on npm; `pnpm install` fetches them from the registry like any other dependency. Versions are pinned in `package.json`. (These were once private tarballs pulled from Azure Blob via a `download-deps` + 1Password bootstrap; that machinery was retired when the packages went public — `git log` for the history.)
 
-```bash
-bash scripts/download-deps.sh   # needs az CLI logged in with storage access
-```
-
-Versions are pinned in `.packages-version`. CI (CircleCI, not GitHub Actions) downloads them via an Azure service principal + 1Password before `pnpm install`. If `pnpm install` fails on a missing local tarball, this is why.
-
-- **`c3source`** — the C3 JSON domain layer: type definitions (`EventSheet`, `Condition`, `Layout`, …), file discovery (`find_all_eventsheets_path`), and primitives like `extractScriptsFromSheet`, `formatCondition`. Treat it as the source of truth for C3's on-disk schema.
-- **`genvid-mcp-utils`** — MCP plumbing: `ReadWriteLock`, `ExpectedChanges`, `paginateText`, `exposeDocs`, `Logger`.
+- **`@genvid/c3source`** — the C3 JSON domain layer: type definitions (`EventSheet`, `Condition`, `Layout`, …), file discovery (`find_all_eventsheets_path`), and primitives like `extractScriptsFromSheet`, `formatCondition`. Treat it as the source of truth for C3's on-disk schema.
+- **`@genvid/mcp-utils`** — MCP plumbing: `ReadWriteLock`, `ExpectedChanges`, `paginateText`, `exposeDocs`, `Logger`.
 
 ## Module system gotchas
 
@@ -79,7 +75,7 @@ The CLI is stateless; the server adds a concurrency layer worth understanding be
 
 - **`txId`** — the `OptimisticWatcher`'s monotonic counter (`watcher.txId`, incremented via `watcher.bump()`) — bumped on every source-file mutation. Optimistic concurrency: read tools / `validate-recipe` return the current `txId`; `apply-recipe` / `sync-project` accept an expected `txId` and reject if it has moved.
 - **`extractedDirty`** — true when source has changed since the last regenerate; read tools append a stale warning and `checkSourceFreshness` flips it by comparing mtimes. Stays module-level (project-specific); set from the watcher's `onSourceChange` callback.
-- **File watchers** — `createSourceWatcher` (`src/mcp/sourceWatcher.ts`) wires genvid-mcp-utils' `OptimisticWatcher` over the source dirs + `project.c3proj`. External source edits bump `txId` and set `extractedDirty` (via `onSourceChange`); `project.c3proj` edits bump `txId` only. Self-induced writes are masked by wrapping them in `watcher.suppress(async () => { … })` (synchronous suppress window) plus `watcher.expect(absPath)` for paths whose watcher event may land after the window closes — when editing a mutate tool, wrap its writes in `suppress` (and `expect()` anything written outside that call) or the watcher will spuriously mark state dirty.
+- **File watchers** — `createSourceWatcher` (`src/mcp/sourceWatcher.ts`) wires @genvid/mcp-utils' `OptimisticWatcher` over the source dirs + `project.c3proj`. External source edits bump `txId` and set `extractedDirty` (via `onSourceChange`); `project.c3proj` edits bump `txId` only. Self-induced writes are masked by wrapping them in `watcher.suppress(async () => { … })` (synchronous suppress window) plus `watcher.expect(absPath)` for paths whose watcher event may land after the window closes — when editing a mutate tool, wrap its writes in `suppress` (and `expect()` anything written outside that call) or the watcher will spuriously mark state dirty.
 - **`ReadWriteLock`** serializes writes, allows concurrent reads. Tools are tagged `READ_ONLY` / `REGENERATE` / `MUTATE` annotations.
 - `CancelledError` paths still bump `txId` (`watcher.bump()`) and set `extractedDirty` because source was already written before regeneration was interrupted.
 
@@ -88,3 +84,21 @@ The CLI is stateless; the server adds a concurrency layer worth understanding be
 - C3 JSON is written tab-indented with a trailing newline: `JSON.stringify(x, null, "\t") + "\n"`. Match this when writing project files.
 - Prettier: 120 cols, spaces for `.ts`, **tabs** for `.json`. ESLint extends prettier and disables `no-unused-vars` / `no-explicit-any`.
 - All file I/O is rooted at a `--project-dir` (defaults to cwd); paths inside recipes/tools are relative to that root. Mutate tools include path-traversal guards — keep them.
+
+## Commit Format
+
+Conventional Commits: `<type>: <subject>`, where `type` is one of `feat`, `fix`, `chore`, `docs`, `refactor`, `test`. Subject is imperative, lowercase, no trailing period. Body (optional) explains the *why* and any non-obvious *what*, wrapped at ~72 cols. When a commit is authored with Claude Code, end the message with the trailer:
+
+```
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+```
+
+Squash-merged PRs carry a `(#N)` suffix on the subject (added by the merge), e.g. `feat: composite template workflow ops + MCP tools (#9)`.
+
+## Pull Request Format
+
+Host is **GitHub** (`gh` CLI). PR title follows the same Conventional Commit shape as the squash subject. The body should summarize what changed and why, call out verification done (lint/typecheck/test), and note any follow-ups. When generated with Claude Code, append the `🤖 Generated with [Claude Code](https://claude.com/claude-code)` footer.
+
+## Branching
+
+Default/base branch is `main`. Do feature work on a topic branch (this repo has used names like `upstream-updates`); never commit directly to `main`. Rebase onto `main` to integrate upstream changes; squash-merge topic branches into `main` via PR. Stacked branches rebase with `--onto` after a parent squash-merges.

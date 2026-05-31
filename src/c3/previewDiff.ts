@@ -1,4 +1,4 @@
-import type { EventSheet, EventSheetEvent } from "c3source";
+import type { EventSheet, EventSheetEvent } from "@genvid/c3source";
 
 function hasActionArrays(event: unknown): boolean {
   return event !== null && typeof event === "object" && Array.isArray((event as Record<string, unknown>).actions);

@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { find_all_layouts_path, type Layout } from "c3source";
+import { find_all_layouts_path, type Layout } from "@genvid/c3source";
 
 /** Map from layoutName -> primary eventSheet name (from layout JSON) */
 export function buildLayoutEventSheetMap(layoutsDir: string): Record<string, string> {

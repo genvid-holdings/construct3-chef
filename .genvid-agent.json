@@ -1,0 +1,22 @@
+{
+  "project": {
+    "name": "construct3-chef",
+    "description": "CLI + MCP server that mutates Construct 3 projects (event sheets, layouts, objectTypes) stored as on-disk JSON, via SID-addressed recipes and a read-side extracted/ generator pipeline.",
+    "languages": ["typescript"]
+  },
+  "commands": {
+    "test": "pnpm test",
+    "lint": "pnpm lint",
+    "build": "pnpm build",
+    "validate": "pnpm lint && pnpm typecheck && pnpm test"
+  },
+  "repo": {
+    "default_branch": "main",
+    "host": "github"
+  },
+  "features": {},
+  "paths": {
+    "docs": "docs",
+    "source": "src"
+  }
+}

@@ -1,11 +1,11 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { extractScripts, generateDSL, generateLayoutSummaries } from "./generators.js";
-import type { Logger } from "genvid-mcp-utils";
-import { escapeRegExp } from "genvid-mcp-utils";
+import type { Logger } from "@genvid/mcp-utils";
+import { escapeRegExp } from "@genvid/mcp-utils";
 import type { ApplyOptions } from "./types.js";
-import type { EventSheet, EventSheetEvent, SidSlot } from "c3source";
-import { find_all_eventsheets_path, find_all_objectTypes_path, find_all_layouts_path, findSid } from "c3source";
+import type { EventSheet, EventSheetEvent, SidSlot } from "@genvid/c3source";
+import { find_all_eventsheets_path, find_all_objectTypes_path, find_all_layouts_path, findSid } from "@genvid/c3source";
 import {
   type Recipe,
   type ObjectTypeCreate,

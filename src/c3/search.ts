@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { walkFiles, toPosixPath } from "genvid-mcp-utils";
+import { walkFiles, toPosixPath } from "@genvid/mcp-utils";
 
 /** File category for search operations. */
 export type SearchType = "dsl" | "ts" | "layout" | "md" | "json" | "idx";

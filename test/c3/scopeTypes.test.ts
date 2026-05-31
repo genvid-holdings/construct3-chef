@@ -1,6 +1,6 @@
 import { describe, it } from "mocha";
 import { assert } from "chai";
-import { type ScopeSegment } from "c3source";
+import { type ScopeSegment } from "@genvid/c3source";
 import { toPascalCase, deriveTypeName, collectUniqueSegments, assignTypeNames } from "../../src/c3/generators.js";
 
 describe("toPascalCase", () => {

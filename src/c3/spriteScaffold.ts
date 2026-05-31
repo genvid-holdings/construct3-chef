@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { mintUniqueSid } from "./sidUtils.js";
-import { walkFiles } from "genvid-mcp-utils";
+import { walkFiles } from "@genvid/mcp-utils";
 
 // SID generation lives in ./sidUtils.js — `mintUniqueSid(existingSids)` enforces the
 // strict [1e14, 1e15) range with a 100-attempt collision cap. The historical local

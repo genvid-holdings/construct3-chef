@@ -39,7 +39,6 @@
 		}
 	},
 	"scripts": {
-		"download-deps": "node scripts/download-deps.mjs",
 		"build": "tsc && node -e \"const fs=require('fs');const f='dist/cli.js';const c=fs.readFileSync(f,'utf8');if(!c.startsWith('#!')){fs.writeFileSync(f,'#!/usr/bin/env node\\n'+c)}\"",
 		"test": "mocha --timeout 5000 --import=tsx --require ./test/setup.ts 'test/**/*.test.ts' --exit",
 		"lint": "eslint --ext .ts --max-warnings 0 src/ test/",
@@ -49,8 +48,8 @@
 		"node": ">=22"
 	},
 	"dependencies": {
-		"genvid-mcp-utils": "file:.packages/genvid-mcp-utils.tgz",
-		"c3source": "file:.packages/c3source.tgz",
+		"@genvid/mcp-utils": "^0.2.0",
+		"@genvid/c3source": "^0.3.1",
 		"@modelcontextprotocol/sdk": "^1.27.1",
 		"yargs": "^17.7.2",
 		"zod": "^3.23.0"

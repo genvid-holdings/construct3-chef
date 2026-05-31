@@ -4,7 +4,7 @@
  */
 
 import type { SidGenerator } from "./sidUtils.js";
-import { escapeRegExp } from "genvid-mcp-utils";
+import { escapeRegExp } from "@genvid/mcp-utils";
 
 export interface InstVarDef {
   name: string;

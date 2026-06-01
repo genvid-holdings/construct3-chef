@@ -14,14 +14,14 @@ import {
   type EventSheet,
 } from "@genvid/c3source";
 import {
-  formatEvent,
   formatEventSheet,
   formatIndex,
   filterIndex,
   buildShallowSidMap,
   buildBlockSearchText,
+  renderNodeSelf,
+  renderSubtree,
   SEARCH_SENTINEL,
-  type EventCounter,
   type DslIndexEntry,
   type SidMapEntry,
 } from "../../src/c3/dslFormatter.js";
@@ -77,7 +77,7 @@ describe("formatAction", () => {
       script: ["const x = 1;", "console.log(x);"],
     };
     const result = formatAction(action, "SheetName", 1, 1);
-    const expected = ["script { // \u2192 SheetName_Event1_Act1", "  const x = 1;", "  console.log(x);", "}"].join(
+    const expected = ["script { // → SheetName_Event1_Act1", "  const x = 1;", "  console.log(x);", "}"].join(
       "\n",
     );
     assert.equal(result, expected);
@@ -176,537 +176,8 @@ describe("formatAction", () => {
   });
 });
 
-describe("formatEvent", () => {
-  function makeCounter(value = 0): EventCounter {
-    return { value };
-  }
-
-  function makeEntries(): DslIndexEntry[] {
-    return [];
-  }
-
-  it("formats an include event", () => {
-    const event: IncludeEvent = { eventType: "include", includeSheet: "SheetName" };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["include SheetName"]);
-  });
-
-  it("formats a comment event", () => {
-    const event: CommentEvent = { eventType: "comment", text: "Load data to header" };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["// Load data to header"]);
-  });
-
-  it("formats a multi-line comment event with continuation lines", () => {
-    const event: CommentEvent = {
-      eventType: "comment",
-      text: "Login support:\nA custom ID is saved in local storage.\nAfter login, it is linked to that account.",
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, [
-      "// Login support:",
-      "// A custom ID is saved in local storage.",
-      "// After login, it is linked to that account.",
-    ]);
-  });
-
-  it("formats a multi-line comment event with indentation", () => {
-    const event: CommentEvent = {
-      eventType: "comment",
-      text: "First line\nSecond line",
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "    ", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["    // First line", "    // Second line"]);
-  });
-
-  it("formats a const variable", () => {
-    const event: EventSheetVariable = {
-      eventType: "variable",
-      name: "MAX_ITEMS",
-      type: "number",
-      initialValue: "10",
-      isStatic: false,
-      isConstant: true,
-      sid: 123,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["const MAX_ITEMS: number = 10"]);
-  });
-
-  it("formats a static variable", () => {
-    const event: EventSheetVariable = {
-      eventType: "variable",
-      name: "counter",
-      type: "number",
-      initialValue: "0",
-      isStatic: true,
-      isConstant: false,
-      sid: 456,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["static counter: number = 0"]);
-  });
-
-  it("formats a regular variable", () => {
-    const event: EventSheetVariable = {
-      eventType: "variable",
-      name: "playerName",
-      type: "string",
-      initialValue: '""',
-      isStatic: false,
-      isConstant: false,
-      sid: 789,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ['var playerName: string = ""']);
-  });
-
-  it("formats a group with children and correct nesting", () => {
-    const child: BlockEvent = {
-      eventType: "block",
-      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
-      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: '"hello"' } }],
-      sid: 100,
-    };
-    const event: GroupEvent = {
-      eventType: "group",
-      disabled: false,
-      title: "UI Setup",
-      isActiveOnStart: true,
-      children: [child],
-      sid: 200,
-    };
-    const counter = makeCounter();
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", counter, "events[0]", 1, entries);
-    assert.deepEqual(lines, [
-      'group "UI Setup" (active)',
-      "  block",
-      "    when: System.on-start-of-layout()",
-      '    do: Label.set-text(text="hello")',
-    ]);
-    // group increments counter (1), block increments counter (2)
-    assert.equal(counter.value, 2);
-  });
-
-  it("formats a block with conditions and actions", () => {
-    const event: BlockEvent = {
-      eventType: "block",
-      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
-      actions: [{ id: "set-text", objectClass: "ScoreText", sid: 2, parameters: { text: "0" } }],
-      sid: 100,
-    };
-    const counter = makeCounter();
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", counter, "events[0]", 1, entries);
-    assert.deepEqual(lines, ["block", "  when: System.on-start-of-layout()", "  do: ScoreText.set-text(text=0)"]);
-    assert.equal(counter.value, 1);
-  });
-
-  it("formats a block with OR flag", () => {
-    const event = {
-      eventType: "block" as const,
-      conditions: [{ id: "on-tap-object", objectClass: "Touch", sid: 1, parameters: { object: "Btn" } }],
-      actions: [],
-      sid: 100,
-      isOrBlock: true,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event as BlockEvent, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["block [OR]", "  when: Touch.on-tap-object(object=Btn)"]);
-  });
-
-  it("formats a function-block with parameters and return type", () => {
-    const event: FunctionBlockEvent = {
-      eventType: "function-block",
-      functionName: "getScore",
-      functionReturnType: "number",
-      functionCopyPicked: false,
-      functionIsAsync: false,
-      functionParameters: [
-        { name: "level", type: "number", initialValue: "1", sid: 10 },
-        { name: "name", type: "string", initialValue: '""', sid: 11 },
-      ],
-      conditions: [],
-      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
-      sid: 300,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, [
-      'function getScore(level: number = 1, name: string = "") -> number',
-      "  do: Label.set-text(text=0)",
-    ]);
-  });
-
-  it("formats an async function-block", () => {
-    const event: FunctionBlockEvent = {
-      eventType: "function-block",
-      functionName: "loadData",
-      functionReturnType: "none",
-      functionCopyPicked: false,
-      functionIsAsync: true,
-      functionParameters: [],
-      conditions: [],
-      actions: [],
-      sid: 400,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["async function loadData() -> none"]);
-  });
-
-  it("formats a custom-ace-block", () => {
-    const event: CustomAceBlockEvent = {
-      eventType: "custom-ace-block",
-      aceType: "condition",
-      aceName: "IsReady",
-      objectClass: "MyPlugin",
-      functionReturnType: "boolean",
-      functionCopyPicked: false,
-      functionIsAsync: false,
-      functionParameters: [{ name: "id", type: "number", initialValue: "0", sid: 20 }],
-      conditions: [],
-      actions: [],
-      sid: 500,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["ace MyPlugin.IsReady(id: number = 0) -> boolean"]);
-  });
-
-  it("formats a block with nested children at correct indentation", () => {
-    const innerChild: BlockEvent = {
-      eventType: "block",
-      conditions: [{ id: "is-visible", objectClass: "Sprite", sid: 3 }],
-      actions: [{ id: "destroy", objectClass: "Sprite", sid: 4 }],
-      sid: 101,
-    };
-    const outerBlock: BlockEvent = {
-      eventType: "block",
-      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
-      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
-      sid: 100,
-      children: [innerChild],
-    };
-    const counter = makeCounter();
-    const entries = makeEntries();
-    const lines = formatEvent(outerBlock, "", "Test", counter, "events[0]", 1, entries);
-    assert.deepEqual(lines, [
-      "block",
-      "  when: System.on-start-of-layout()",
-      "  do: Label.set-text(text=0)",
-      "",
-      "  block",
-      "    when: Sprite.is-visible()",
-      "    do: Sprite.destroy()",
-    ]);
-    assert.equal(counter.value, 2);
-  });
-
-  it("formats a function-block with copy-picked flag", () => {
-    const event: FunctionBlockEvent = {
-      eventType: "function-block",
-      functionName: "processItems",
-      functionReturnType: "none",
-      functionCopyPicked: true,
-      functionIsAsync: false,
-      functionParameters: [],
-      conditions: [],
-      actions: [],
-      sid: 600,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["function processItems() -> none [copy-picked]"]);
-  });
-
-  it("formats a function-block with category only", () => {
-    const event: FunctionBlockEvent = {
-      eventType: "function-block",
-      functionName: "doStuff",
-      functionReturnType: "none",
-      functionCopyPicked: false,
-      functionIsAsync: false,
-      functionParameters: [],
-      functionCategory: "MyCategory",
-      conditions: [],
-      actions: [],
-      sid: 601,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["function doStuff() -> none [category: MyCategory]"]);
-  });
-
-  it("formats a function-block with description only", () => {
-    const event: FunctionBlockEvent = {
-      eventType: "function-block",
-      functionName: "doStuff",
-      functionReturnType: "none",
-      functionCopyPicked: false,
-      functionIsAsync: false,
-      functionParameters: [],
-      functionDescription: "Some description",
-      conditions: [],
-      actions: [],
-      sid: 602,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["function doStuff() -> none -- Some description"]);
-  });
-
-  it("formats a function-block with both category and description", () => {
-    const event: FunctionBlockEvent = {
-      eventType: "function-block",
-      functionName: "doStuff",
-      functionReturnType: "none",
-      functionCopyPicked: false,
-      functionIsAsync: false,
-      functionParameters: [],
-      functionCategory: "MyCategory",
-      functionDescription: "Some description",
-      conditions: [],
-      actions: [],
-      sid: 603,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["function doStuff() -> none [category: MyCategory] -- Some description"]);
-  });
-
-  it("formats a function-block with copy-picked, category, and description", () => {
-    const event: FunctionBlockEvent = {
-      eventType: "function-block",
-      functionName: "processItems",
-      functionReturnType: "none",
-      functionCopyPicked: true,
-      functionIsAsync: false,
-      functionParameters: [],
-      functionCategory: "X",
-      functionDescription: "desc",
-      conditions: [],
-      actions: [],
-      sid: 604,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["function processItems() -> none [copy-picked] [category: X] -- desc"]);
-  });
-
-  it("formats a custom-ace-block with category and description", () => {
-    const event: CustomAceBlockEvent = {
-      eventType: "custom-ace-block",
-      aceType: "action",
-      aceName: "slashAttack",
-      objectClass: "SlashAttackers",
-      functionReturnType: "none",
-      functionCopyPicked: true,
-      functionIsAsync: false,
-      functionParameters: [],
-      functionCategory: "SlashAttackers",
-      functionDescription: "Implementation of a single attack",
-      conditions: [],
-      actions: [],
-      sid: 605,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, [
-      "ace SlashAttackers.slashAttack() -> none [copy-picked] [category: SlashAttackers] -- Implementation of a single attack",
-    ]);
-  });
-
-  it("does not increment counter for variable, comment, or include events", () => {
-    const counter = makeCounter();
-    const entries = makeEntries();
-    formatEvent(
-      { eventType: "include", includeSheet: "Other" } as IncludeEvent,
-      "",
-      "T",
-      counter,
-      "events[0]",
-      1,
-      entries,
-    );
-    assert.equal(counter.value, 0);
-    formatEvent({ eventType: "comment", text: "hi" } as CommentEvent, "", "T", counter, "events[1]", 2, entries);
-    assert.equal(counter.value, 0);
-    formatEvent(
-      {
-        eventType: "variable",
-        name: "x",
-        type: "number",
-        initialValue: "0",
-        isStatic: false,
-        isConstant: false,
-        sid: 1,
-      } as EventSheetVariable,
-      "",
-      "T",
-      counter,
-      "events[2]",
-      3,
-      entries,
-    );
-    assert.equal(counter.value, 0);
-  });
-
-  it("formats a disabled group", () => {
-    const event: GroupEvent = {
-      eventType: "group",
-      disabled: true,
-      title: "Debug",
-      isActiveOnStart: false,
-      children: [],
-      sid: 700,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ['group "Debug" [DISABLED] (inactive)']);
-  });
-
-  it("formats a disabled block", () => {
-    const event = {
-      eventType: "block" as const,
-      conditions: [],
-      actions: [],
-      sid: 100,
-      disabled: true,
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(event as BlockEvent, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["block [DISABLED]"]);
-  });
-
-  it("prefixes disabled conditions with [DISABLED]", () => {
-    // `disabled` is not declared on the c3source `Condition` type, but C3 stores it
-    // at runtime — cast through `unknown` to model what source JSON actually carries.
-    const event = {
-      eventType: "block" as const,
-      conditions: [
-        {
-          id: "compare-boolean-eventvar",
-          objectClass: "GameState",
-          sid: 969513000111828,
-          parameters: { name: "hasCheckedTitleNewsPopup" },
-          disabled: true,
-        },
-      ],
-      actions: [],
-      sid: 100,
-    } as unknown as BlockEvent;
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, [
-      "block",
-      "  when: [DISABLED] GameState.compare-boolean-eventvar(name=hasCheckedTitleNewsPopup)",
-    ]);
-  });
-
-  it("combines NOT and [DISABLED] on a single condition", () => {
-    const event = {
-      eventType: "block" as const,
-      conditions: [
-        {
-          id: "compare-boolean-eventvar",
-          objectClass: "GameState",
-          sid: 414452253306203,
-          parameters: { name: "hasCheckedTitleNewsPopup" },
-          isInverted: true,
-          disabled: true,
-        },
-      ],
-      actions: [],
-      sid: 100,
-    } as unknown as BlockEvent;
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, [
-      "block",
-      "  when: [DISABLED] NOT GameState.compare-boolean-eventvar(name=hasCheckedTitleNewsPopup)",
-    ]);
-  });
-
-  it("renders enabled conditions without the [DISABLED] marker", () => {
-    // `disabled: false` and `disabled` omitted should both render bare — regression guard
-    // so the disabled detection doesn't fire on truthy-but-non-true values.
-    const event = {
-      eventType: "block" as const,
-      conditions: [
-        { id: "on-start-of-layout", objectClass: "System", sid: 1 },
-        {
-          id: "is-visible",
-          objectClass: "Sprite",
-          sid: 2,
-          disabled: false,
-        },
-      ],
-      actions: [],
-      sid: 100,
-    } as unknown as BlockEvent;
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, ["block", "  when: System.on-start-of-layout()", "  when: Sprite.is-visible()"]);
-  });
-
-  it("formats a block with comment action (no do: prefix)", () => {
-    const event: BlockEvent = {
-      eventType: "block",
-      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
-      actions: [
-        { type: "comment", text: "First line\nSecond line" },
-        { id: "destroy", objectClass: "Sprite", sid: 4 },
-      ],
-      sid: 100,
-    };
-    const counter = makeCounter();
-    const entries = makeEntries();
-    const lines = formatEvent(event, "", "Test", counter, "events[0]", 1, entries);
-    // Multi-line comments produce one line per comment line
-    assert.deepEqual(lines, [
-      "block",
-      "  when: System.on-start-of-layout()",
-      "  // First line",
-      "  // Second line",
-      "  do: Sprite.destroy()",
-    ]);
-  });
-
-  it("formats a block with empty actions and children without extra blank line", () => {
-    const child: BlockEvent = {
-      eventType: "block",
-      conditions: [{ id: "is-visible", objectClass: "Sprite", sid: 3 }],
-      actions: [{ id: "destroy", objectClass: "Sprite", sid: 4 }],
-      sid: 101,
-    };
-    const parentBlock: BlockEvent = {
-      eventType: "block",
-      conditions: [{ id: "on-end-of-layout", objectClass: "System", sid: 1 }],
-      actions: [],
-      sid: 100,
-      children: [child],
-    };
-    const entries = makeEntries();
-    const lines = formatEvent(parentBlock, "", "Test", makeCounter(), "events[0]", 1, entries);
-    assert.deepEqual(lines, [
-      "block",
-      "  when: System.on-end-of-layout()",
-      "",
-      "  block",
-      "    when: Sprite.is-visible()",
-      "    do: Sprite.destroy()",
-    ]);
-  });
-});
+// describe("formatEvent") and describe("DslIndexEntry generation") removed in F2.
+// Coverage lives in describe("renderNodeSelf") and describe("renderSubtree") below.
 
 describe("formatEventSheet", () => {
   it("produces correct header with sheet name and source path", () => {
@@ -758,404 +229,11 @@ describe("formatEventSheet", () => {
   });
 });
 
-describe("DslIndexEntry generation", () => {
-  function makeCounter(value = 0): EventCounter {
-    return { value };
-  }
-
-  function makeEntries(): DslIndexEntry[] {
-    return [];
-  }
-
-  it("top-level block gets events[0] path, correct line number, and eventNumber 1", () => {
-    const event: BlockEvent = {
-      eventType: "block",
-      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
-      actions: [],
-      sid: 100,
-    };
-    const entries = makeEntries();
-    formatEvent(event, "", "Test", makeCounter(), "events[0]", 4, entries);
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0].jsonPath, "events[0]");
-    assert.equal(entries[0].dslLineNumber, 4);
-    assert.equal(entries[0].eventNumber, 1);
-    assert.equal(entries[0].description, "block");
-  });
-
-  it("non-counting events (include, comment, variable) get entries with eventNumber null", () => {
-    const entries = makeEntries();
-    const counter = makeCounter();
-
-    formatEvent(
-      { eventType: "include", includeSheet: "Other" } as IncludeEvent,
-      "",
-      "T",
-      counter,
-      "events[0]",
-      4,
-      entries,
-    );
-    formatEvent({ eventType: "comment", text: "hi" } as CommentEvent, "", "T", counter, "events[1]", 6, entries);
-    formatEvent(
-      {
-        eventType: "variable",
-        name: "x",
-        type: "number",
-        initialValue: "0",
-        isStatic: false,
-        isConstant: false,
-        sid: 1,
-      } as EventSheetVariable,
-      "",
-      "T",
-      counter,
-      "events[2]",
-      7,
-      entries,
-    );
-
-    assert.equal(entries.length, 3);
-    assert.equal(entries[0].eventNumber, null);
-    assert.equal(entries[1].eventNumber, null);
-    assert.equal(entries[2].eventNumber, null);
-  });
-
-  it("group with children gets correct nested paths", () => {
-    const child1: BlockEvent = {
-      eventType: "block",
-      conditions: [],
-      actions: [],
-      sid: 101,
-    };
-    const child2: BlockEvent = {
-      eventType: "block",
-      conditions: [],
-      actions: [],
-      sid: 102,
-    };
-    const group: GroupEvent = {
-      eventType: "group",
-      disabled: false,
-      title: "MyGroup",
-      isActiveOnStart: true,
-      children: [child1, child2],
-      sid: 200,
-    };
-
-    const entries = makeEntries();
-    formatEvent(group, "", "Test", makeCounter(), "events[0]", 1, entries);
-
-    assert.equal(entries.length, 3);
-    assert.equal(entries[0].jsonPath, "events[0]");
-    assert.equal(entries[0].description, 'group "MyGroup"');
-    assert.equal(entries[1].jsonPath, "events[0].children[0]");
-    assert.equal(entries[1].description, "block");
-    assert.equal(entries[2].jsonPath, "events[0].children[1]");
-    assert.equal(entries[2].description, "block");
-  });
-
-  it("deeply nested children (block inside group inside group)", () => {
-    const innerBlock: BlockEvent = {
-      eventType: "block",
-      conditions: [],
-      actions: [],
-      sid: 103,
-    };
-    const innerGroup: GroupEvent = {
-      eventType: "group",
-      disabled: false,
-      title: "Inner",
-      isActiveOnStart: true,
-      children: [innerBlock],
-      sid: 201,
-    };
-    const outerGroup: GroupEvent = {
-      eventType: "group",
-      disabled: false,
-      title: "Outer",
-      isActiveOnStart: true,
-      children: [innerGroup],
-      sid: 200,
-    };
-
-    const entries = makeEntries();
-    formatEvent(outerGroup, "", "Test", makeCounter(), "events[0]", 1, entries);
-
-    assert.equal(entries.length, 3);
-    assert.equal(entries[0].jsonPath, "events[0]");
-    assert.equal(entries[1].jsonPath, "events[0].children[0]");
-    assert.equal(entries[2].jsonPath, "events[0].children[0].children[0]");
-  });
-
-  it("mixed event types: variable + comment + block as siblings — all indexed with correct JSON array indices", () => {
-    const variable: EventSheetVariable = {
-      eventType: "variable",
-      name: "count",
-      type: "number",
-      initialValue: "0",
-      isStatic: false,
-      isConstant: false,
-      sid: 1,
-    };
-    const comment: CommentEvent = {
-      eventType: "comment",
-      text: "Setup",
-    };
-    const block: BlockEvent = {
-      eventType: "block",
-      conditions: [],
-      actions: [],
-      sid: 100,
-    };
-    const group: GroupEvent = {
-      eventType: "group",
-      disabled: false,
-      title: "Mixed",
-      isActiveOnStart: true,
-      children: [variable, comment, block],
-      sid: 200,
-    };
-
-    const entries = makeEntries();
-    formatEvent(group, "", "Test", makeCounter(), "events[0]", 1, entries);
-
-    assert.equal(entries.length, 4); // group + 3 children
-    assert.equal(entries[0].jsonPath, "events[0]"); // group
-    assert.equal(entries[1].jsonPath, "events[0].children[0]"); // variable
-    assert.equal(entries[2].jsonPath, "events[0].children[1]"); // comment
-    assert.equal(entries[3].jsonPath, "events[0].children[2]"); // block
-  });
-
-  it("event numbering matches counter across mixed event types (variables don't increment)", () => {
-    const variable: EventSheetVariable = {
-      eventType: "variable",
-      name: "count",
-      type: "number",
-      initialValue: "0",
-      isStatic: false,
-      isConstant: false,
-      sid: 1,
-    };
-    const block1: BlockEvent = {
-      eventType: "block",
-      conditions: [],
-      actions: [],
-      sid: 100,
-    };
-    const block2: BlockEvent = {
-      eventType: "block",
-      conditions: [],
-      actions: [],
-      sid: 101,
-    };
-    const group: GroupEvent = {
-      eventType: "group",
-      disabled: false,
-      title: "Numbering",
-      isActiveOnStart: true,
-      children: [variable, block1, block2],
-      sid: 200,
-    };
-
-    const entries = makeEntries();
-    formatEvent(group, "", "Test", makeCounter(), "events[0]", 1, entries);
-
-    // group=1, variable=null, block1=2, block2=3
-    assert.equal(entries[0].eventNumber, 1); // group
-    assert.equal(entries[1].eventNumber, null); // variable
-    assert.equal(entries[2].eventNumber, 2); // block1
-    assert.equal(entries[3].eventNumber, 3); // block2
-  });
-
-  it("description matches expected format for each event type", () => {
-    const entries = makeEntries();
-    const counter = makeCounter();
-
-    // include
-    formatEvent(
-      { eventType: "include", includeSheet: "OtherSheet" } as IncludeEvent,
-      "",
-      "T",
-      counter,
-      "events[0]",
-      1,
-      entries,
-    );
-    assert.equal(entries[0].description, "include OtherSheet");
-
-    // single-line comment
-    formatEvent({ eventType: "comment", text: "A note" } as CommentEvent, "", "T", counter, "events[1]", 2, entries);
-    assert.equal(entries[1].description, "// A note");
-
-    // multi-line comment (truncated)
-    formatEvent(
-      { eventType: "comment", text: "Line one\nLine two" } as CommentEvent,
-      "",
-      "T",
-      counter,
-      "events[2]",
-      3,
-      entries,
-    );
-    assert.equal(entries[2].description, "// Line one...");
-
-    // variable
-    formatEvent(
-      {
-        eventType: "variable",
-        name: "hp",
-        type: "number",
-        initialValue: "100",
-        isStatic: false,
-        isConstant: false,
-        sid: 1,
-      } as EventSheetVariable,
-      "",
-      "T",
-      counter,
-      "events[3]",
-      4,
-      entries,
-    );
-    assert.equal(entries[3].description, "var hp: number = 100");
-
-    // block
-    formatEvent(
-      { eventType: "block", conditions: [], actions: [], sid: 10 } as BlockEvent,
-      "",
-      "T",
-      counter,
-      "events[4]",
-      5,
-      entries,
-    );
-    assert.equal(entries[4].description, "block");
-
-    // block [OR]
-    formatEvent(
-      { eventType: "block", conditions: [], actions: [], sid: 11, isOrBlock: true } as BlockEvent,
-      "",
-      "T",
-      counter,
-      "events[5]",
-      6,
-      entries,
-    );
-    assert.equal(entries[5].description, "block [OR]");
-
-    // group
-    formatEvent(
-      { eventType: "group", disabled: false, title: "Grp", isActiveOnStart: true, children: [], sid: 12 } as GroupEvent,
-      "",
-      "T",
-      counter,
-      "events[6]",
-      7,
-      entries,
-    );
-    assert.equal(entries[6].description, 'group "Grp"');
-
-    // function-block
-    formatEvent(
-      {
-        eventType: "function-block",
-        functionName: "doStuff",
-        functionReturnType: "none",
-        functionCopyPicked: false,
-        functionIsAsync: false,
-        functionParameters: [],
-        conditions: [],
-        actions: [],
-        sid: 13,
-      } as FunctionBlockEvent,
-      "",
-      "T",
-      counter,
-      "events[7]",
-      8,
-      entries,
-    );
-    assert.equal(entries[7].description, "function doStuff()");
-
-    // custom-ace-block
-    formatEvent(
-      {
-        eventType: "custom-ace-block",
-        aceType: "condition",
-        aceName: "Check",
-        objectClass: "Plug",
-        functionReturnType: "boolean",
-        functionCopyPicked: false,
-        functionIsAsync: false,
-        functionParameters: [],
-        conditions: [],
-        actions: [],
-        sid: 14,
-      } as CustomAceBlockEvent,
-      "",
-      "T",
-      counter,
-      "events[8]",
-      9,
-      entries,
-    );
-    assert.equal(entries[8].description, "ace Plug.Check()");
-  });
-
-  it("formatEventSheet returns index entries for all events", () => {
-    const sheet: EventSheet = {
-      name: "IndexSheet",
-      events: [
-        { eventType: "include", includeSheet: "Other" } as IncludeEvent,
-        {
-          eventType: "block",
-          conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
-          actions: [],
-          sid: 100,
-        } as BlockEvent,
-      ],
-      sid: 999,
-    };
-    const { dsl, index } = formatEventSheet(sheet, "C:/repos/burbank/eventSheets/IndexSheet.json");
-    assert.equal(index.length, 2);
-    assert.equal(index[0].jsonPath, "events[0]");
-    assert.equal(index[0].eventNumber, null); // include
-    assert.equal(index[0].dslLineNumber, 4); // line 4 (after header)
-    assert.equal(index[1].jsonPath, "events[1]");
-    assert.equal(index[1].eventNumber, 1); // block
-    assert.equal(index[1].dslLineNumber, 6); // line 4 (include) + blank line + block at line 6
-    // DSL output should still be correct
-    assert.include(dsl, "# IndexSheet");
-    assert.include(dsl, "include Other");
-  });
-
-  it("line numbers track correctly across multi-line events", () => {
-    const sheet: EventSheet = {
-      name: "LineSheet",
-      events: [
-        { eventType: "comment", text: "Line 1\nLine 2\nLine 3" } as CommentEvent,
-        {
-          eventType: "block",
-          conditions: [{ id: "test", objectClass: "System", sid: 1 }],
-          actions: [],
-          sid: 100,
-        } as BlockEvent,
-      ],
-      sid: 999,
-    };
-    const { index } = formatEventSheet(sheet, "C:/repos/burbank/eventSheets/LineSheet.json");
-    assert.equal(index[0].dslLineNumber, 4); // comment starts at line 4
-    // Comment is 3 lines (4,5,6) + blank line (7) → block at line 8
-    assert.equal(index[1].dslLineNumber, 8);
-  });
-});
-
 describe("formatIndex", () => {
   it("produces header-only output for empty entries", () => {
     const result = formatIndex("TestSheet", []);
     const lines = result.split("\n");
-    assert.equal(lines[0], "# TestSheet \u2014 DSL Coordinate Index");
+    assert.equal(lines[0], "# TestSheet — DSL Coordinate Index");
     assert.equal(lines[1], "# Regenerate: npm run generate-dsl");
     assert.equal(lines[2], "#");
     // Header and separator should still be present
@@ -1235,17 +313,18 @@ describe("formatIndex", () => {
     const lines = result.split("\n");
 
     // Block row (line 5) should show §100234567890123
-    assert.include(lines[5], "\u00a7100234567890123");
+    assert.include(lines[5], "§100234567890123");
 
     // Include row (line 6) should have blank SID column
     const includeParts = lines[6].split("|");
     assert.match(includeParts[2].trim(), /^$/);
 
     // Function row (line 7) should show §200000000000001
-    assert.include(lines[7], "\u00a7200000000000001");
+    assert.include(lines[7], "§200000000000001");
   });
 
-  it("formats group and custom-ace-block events with SID", () => {
+  it("group and custom-ace-block events produce SID in index entry (via renderSubtree)", () => {
+    // Migrated from DslIndexEntry generation — verifies group SID is captured in the index.
     const groupEvent: GroupEvent = {
       eventType: "group",
       title: "Main",
@@ -1254,19 +333,13 @@ describe("formatIndex", () => {
       sid: 300000000000042,
       children: [],
     };
-    const entries: DslIndexEntry[] = [];
-    formatEvent(groupEvent, "", "TestSheet", { value: 0 }, "events[0]", 1, entries);
-
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0].sid, 300000000000042);
+    const { index } = renderSubtree([groupEvent], "TestSheet", 1);
+    assert.equal(index.length, 1);
+    assert.equal(index[0].sid, 300000000000042);
   });
 });
 
 describe("block index entries (searchText contract)", () => {
-  function makeCounter(value = 0): EventCounter {
-    return { value };
-  }
-
   it("block with actions generates exactly ONE index entry (the block row) and NO actionIndex entries", () => {
     const event: BlockEvent = {
       eventType: "block",
@@ -1278,16 +351,15 @@ describe("block index entries (searchText contract)", () => {
       ],
       sid: 100,
     };
-    const entries: DslIndexEntry[] = [];
-    formatEvent(event, "", "TestSheet", makeCounter(), "events[0]", 1, entries);
+    const { index } = renderSubtree([event], "TestSheet", 1);
 
     // Exactly 1 entry — the block row; no per-action rows
-    assert.equal(entries.length, 1);
+    assert.equal(index.length, 1);
 
     // The single entry is the block event itself
-    assert.equal(entries[0].eventNumber, 1);
-    assert.equal(entries[0].actionIndex, undefined);
-    assert.equal(entries[0].description, "block");
+    assert.equal(index[0].eventNumber, 1);
+    assert.equal(index[0].actionIndex, undefined);
+    assert.equal(index[0].description, "block");
   });
 
   it("block with parameterized action has searchText containing the parameter value", () => {
@@ -1304,15 +376,14 @@ describe("block index entries (searchText contract)", () => {
       ],
       sid: 100,
     };
-    const entries: DslIndexEntry[] = [];
-    formatEvent(event, "", "TestSheet", makeCounter(), "events[0]", 1, entries);
+    const { index } = renderSubtree([event], "TestSheet", 1);
 
-    assert.equal(entries.length, 1);
-    assert.isDefined(entries[0].searchText);
+    assert.equal(index.length, 1);
+    assert.isDefined(index[0].searchText);
     // Parameter value must be present in the hidden search tail
-    assert.include(entries[0].searchText!, "Main Layout");
+    assert.include(index[0].searchText!, "Main Layout");
     // The visible description remains clean
-    assert.equal(entries[0].description, "block");
+    assert.equal(index[0].description, "block");
   });
 
   it("block with mix of actions has searchText populated with all action content", () => {
@@ -1326,13 +397,12 @@ describe("block index entries (searchText contract)", () => {
       ],
       sid: 100,
     };
-    const entries: DslIndexEntry[] = [];
-    formatEvent(event, "", "MySheet", makeCounter(), "events[0]", 1, entries);
+    const { index } = renderSubtree([event], "MySheet", 1);
 
     // Still exactly 1 entry
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0].actionIndex, undefined);
-    assert.include(entries[0].searchText!, "handleInit");
+    assert.equal(index.length, 1);
+    assert.equal(index[0].actionIndex, undefined);
+    assert.include(index[0].searchText!, "handleInit");
   });
 
   it("block with no conditions and no actions has empty searchText", () => {
@@ -1342,11 +412,10 @@ describe("block index entries (searchText contract)", () => {
       actions: [],
       sid: 200,
     };
-    const entries: DslIndexEntry[] = [];
-    formatEvent(event, "", "TestSheet", makeCounter(), "events[0]", 1, entries);
+    const { index } = renderSubtree([event], "TestSheet", 1);
 
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0].searchText, "");
+    assert.equal(index.length, 1);
+    assert.equal(index[0].searchText, "");
   });
 
   it("formatIndex renders block row with sentinel + flattened searchText in Description column", () => {
@@ -1891,5 +960,822 @@ describe("buildBlockSearchText", () => {
     const result = buildBlockSearchText(event, makeSheet(), 1);
     assert.include(result, "System.on-start-of-layout");
     assert.include(result, "BattleLayout");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderNodeSelf — new seam added in P1
+// ---------------------------------------------------------------------------
+
+describe("renderNodeSelf", () => {
+  it("include event — returns single include line", () => {
+    const event: IncludeEvent = { eventType: "include", includeSheet: "CommonEvents" };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["include CommonEvents"]);
+  });
+
+  it("comment event (single-line) — returns single // line", () => {
+    const event: CommentEvent = { eventType: "comment", text: "Load data to header" };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["// Load data to header"]);
+  });
+
+  it("comment event (multi-line) — returns one // line per source line", () => {
+    const event: CommentEvent = {
+      eventType: "comment",
+      text: "Login support:\nA custom ID is saved in local storage.\nAfter login, it is linked to that account.",
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, [
+      "// Login support:",
+      "// A custom ID is saved in local storage.",
+      "// After login, it is linked to that account.",
+    ]);
+  });
+
+  it("variable event (const) — returns the formatted variable line", () => {
+    const event: EventSheetVariable = {
+      eventType: "variable",
+      name: "MAX_ITEMS",
+      type: "number",
+      initialValue: "10",
+      isStatic: false,
+      isConstant: true,
+      sid: 123,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["const MAX_ITEMS: number = 10"]);
+  });
+
+  it("variable event (static) — returns 'static' keyword", () => {
+    const event: EventSheetVariable = {
+      eventType: "variable",
+      name: "counter",
+      type: "number",
+      initialValue: "0",
+      isStatic: true,
+      isConstant: false,
+      sid: 456,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["static counter: number = 0"]);
+  });
+
+  it("variable event (regular var) — returns 'var' keyword", () => {
+    const event: EventSheetVariable = {
+      eventType: "variable",
+      name: "playerName",
+      type: "string",
+      initialValue: '""',
+      isStatic: false,
+      isConstant: false,
+      sid: 789,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ['var playerName: string = ""']);
+  });
+
+  it("group event — returns single group header line with active state", () => {
+    const event: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "UI Setup",
+      isActiveOnStart: true,
+      children: [],
+      sid: 200,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ['group "UI Setup" (active)']);
+  });
+
+  it("group event (disabled, inactive) — returns header with [DISABLED] and (inactive)", () => {
+    const event: GroupEvent = {
+      eventType: "group",
+      disabled: true,
+      title: "Debug",
+      isActiveOnStart: false,
+      children: [],
+      sid: 700,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ['group "Debug" [DISABLED] (inactive)']);
+  });
+
+  it("block event — returns header + when: condition + do: action lines", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "ScoreText", sid: 2, parameters: { text: "0" } }],
+      sid: 100,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["block", "  when: System.on-start-of-layout()", "  do: ScoreText.set-text(text=0)"]);
+  });
+
+  it("block event WITH children — returns ONLY own header/when:/do: lines, no child content", () => {
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "is-visible", objectClass: "Sprite", sid: 3 }],
+      actions: [{ id: "destroy", objectClass: "Sprite", sid: 4 }],
+      sid: 101,
+    };
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
+      sid: 100,
+      children: [child],
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    // Own lines only: header + when: + do:
+    assert.deepEqual(lines, ["block", "  when: System.on-start-of-layout()", "  do: Label.set-text(text=0)"]);
+    // Must not contain child content
+    assert.notInclude(lines.join("\n"), "Sprite");
+    assert.notInclude(lines.join("\n"), "is-visible");
+    assert.notInclude(lines.join("\n"), "destroy");
+  });
+
+  it("block event with [OR] flag — returns 'block [OR]' header", () => {
+    const event = {
+      eventType: "block" as const,
+      conditions: [{ id: "on-tap-object", objectClass: "Touch", sid: 1, parameters: { object: "Btn" } }],
+      actions: [],
+      sid: 100,
+      isOrBlock: true,
+    };
+    const lines = renderNodeSelf(event as BlockEvent, "", "Test", 1);
+    assert.deepEqual(lines, ["block [OR]", "  when: Touch.on-tap-object(object=Btn)"]);
+  });
+
+  it("block event with [DISABLED] flag — returns 'block [DISABLED]' header", () => {
+    const event = {
+      eventType: "block" as const,
+      conditions: [],
+      actions: [],
+      sid: 100,
+      disabled: true,
+    };
+    const lines = renderNodeSelf(event as BlockEvent, "", "Test", 1);
+    assert.deepEqual(lines, ["block [DISABLED]"]);
+  });
+
+  it("block event with disabled condition — condition gets [DISABLED] prefix", () => {
+    const event = {
+      eventType: "block" as const,
+      conditions: [
+        {
+          id: "compare-boolean-eventvar",
+          objectClass: "GameState",
+          sid: 969513000111828,
+          parameters: { name: "hasCheckedTitleNewsPopup" },
+          disabled: true,
+        },
+      ],
+      actions: [],
+      sid: 100,
+    } as unknown as BlockEvent;
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: [DISABLED] GameState.compare-boolean-eventvar(name=hasCheckedTitleNewsPopup)",
+    ]);
+  });
+
+  it("block event with NOT + disabled condition — both prefixes appear", () => {
+    const event = {
+      eventType: "block" as const,
+      conditions: [
+        {
+          id: "compare-boolean-eventvar",
+          objectClass: "GameState",
+          sid: 414452253306203,
+          parameters: { name: "hasCheckedTitleNewsPopup" },
+          isInverted: true,
+          disabled: true,
+        },
+      ],
+      actions: [],
+      sid: 100,
+    } as unknown as BlockEvent;
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: [DISABLED] NOT GameState.compare-boolean-eventvar(name=hasCheckedTitleNewsPopup)",
+    ]);
+  });
+
+  it("block event with enabled conditions — no [DISABLED] marker (regression guard)", () => {
+    // disabled: false and disabled omitted should both render bare.
+    const event = {
+      eventType: "block" as const,
+      conditions: [
+        { id: "on-start-of-layout", objectClass: "System", sid: 1 },
+        { id: "is-visible", objectClass: "Sprite", sid: 2, disabled: false },
+      ],
+      actions: [],
+      sid: 100,
+    } as unknown as BlockEvent;
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["block", "  when: System.on-start-of-layout()", "  when: Sprite.is-visible()"]);
+  });
+
+  it("block event with comment action — no 'do:' prefix, multi-line indented", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [
+        { type: "comment", text: "First line\nSecond line" },
+        { id: "destroy", objectClass: "Sprite", sid: 4 },
+      ],
+      sid: 100,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: System.on-start-of-layout()",
+      "  // First line",
+      "  // Second line",
+      "  do: Sprite.destroy()",
+    ]);
+  });
+
+  it("function-block event — returns header + do: action line", () => {
+    const event: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "getScore",
+      functionReturnType: "number",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [
+        { name: "level", type: "number", initialValue: "1", sid: 10 },
+        { name: "name", type: "string", initialValue: '""', sid: 11 },
+      ],
+      conditions: [],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
+      sid: 300,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, [
+      'function getScore(level: number = 1, name: string = "") -> number',
+      "  do: Label.set-text(text=0)",
+    ]);
+  });
+
+  it("async function-block — header starts with 'async function'", () => {
+    const event: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "loadData",
+      functionReturnType: "none",
+      functionCopyPicked: false,
+      functionIsAsync: true,
+      functionParameters: [],
+      conditions: [],
+      actions: [],
+      sid: 400,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["async function loadData() -> none"]);
+  });
+
+  it("function-block with copy-picked flag — appends [copy-picked]", () => {
+    const event: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "processItems",
+      functionReturnType: "none",
+      functionCopyPicked: true,
+      functionIsAsync: false,
+      functionParameters: [],
+      conditions: [],
+      actions: [],
+      sid: 600,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["function processItems() -> none [copy-picked]"]);
+  });
+
+  it("function-block with category only — appends [category: X]", () => {
+    const event: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "doStuff",
+      functionReturnType: "none",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [],
+      functionCategory: "MyCategory",
+      conditions: [],
+      actions: [],
+      sid: 601,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["function doStuff() -> none [category: MyCategory]"]);
+  });
+
+  it("function-block with description only — appends '-- desc'", () => {
+    const event: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "doStuff",
+      functionReturnType: "none",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [],
+      functionDescription: "Some description",
+      conditions: [],
+      actions: [],
+      sid: 602,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["function doStuff() -> none -- Some description"]);
+  });
+
+  it("function-block with both category and description — appends both", () => {
+    const event: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "doStuff",
+      functionReturnType: "none",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [],
+      functionCategory: "MyCategory",
+      functionDescription: "Some description",
+      conditions: [],
+      actions: [],
+      sid: 603,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["function doStuff() -> none [category: MyCategory] -- Some description"]);
+  });
+
+  it("function-block with copy-picked, category, and description — all three flags", () => {
+    const event: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "processItems",
+      functionReturnType: "none",
+      functionCopyPicked: true,
+      functionIsAsync: false,
+      functionParameters: [],
+      functionCategory: "X",
+      functionDescription: "desc",
+      conditions: [],
+      actions: [],
+      sid: 604,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["function processItems() -> none [copy-picked] [category: X] -- desc"]);
+  });
+
+  it("custom-ace-block event — returns header line", () => {
+    const event: CustomAceBlockEvent = {
+      eventType: "custom-ace-block",
+      aceType: "condition",
+      aceName: "IsReady",
+      objectClass: "MyPlugin",
+      functionReturnType: "boolean",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [{ name: "id", type: "number", initialValue: "0", sid: 20 }],
+      conditions: [],
+      actions: [],
+      sid: 500,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["ace MyPlugin.IsReady(id: number = 0) -> boolean"]);
+  });
+
+  it("custom-ace-block with copy-picked, category, and description", () => {
+    const event: CustomAceBlockEvent = {
+      eventType: "custom-ace-block",
+      aceType: "action",
+      aceName: "slashAttack",
+      objectClass: "SlashAttackers",
+      functionReturnType: "none",
+      functionCopyPicked: true,
+      functionIsAsync: false,
+      functionParameters: [],
+      functionCategory: "SlashAttackers",
+      functionDescription: "Implementation of a single attack",
+      conditions: [],
+      actions: [],
+      sid: 605,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, [
+      "ace SlashAttackers.slashAttack() -> none [copy-picked] [category: SlashAttackers] -- Implementation of a single attack",
+    ]);
+  });
+
+  it("indentation — all own lines are prefixed with the given indent", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "destroy", objectClass: "Sprite", sid: 2 }],
+      sid: 100,
+    };
+    const lines = renderNodeSelf(event, "  ", "Test", 1);
+    assert.deepEqual(lines, [
+      "  block",
+      "    when: System.on-start-of-layout()",
+      "    do: Sprite.destroy()",
+    ]);
+  });
+
+  it("indentation — include and comment lines also receive the prefix", () => {
+    const include: IncludeEvent = { eventType: "include", includeSheet: "CommonEvents" };
+    const comment: CommentEvent = { eventType: "comment", text: "First line\nSecond line" };
+    assert.deepEqual(renderNodeSelf(include, "    ", "Test", 1), ["    include CommonEvents"]);
+    assert.deepEqual(renderNodeSelf(comment, "    ", "Test", 1), ["    // First line", "    // Second line"]);
+  });
+
+  // eventNumber threading: renderNodeSelf passes `eventNumber` to formatAction,
+  // which embeds it in the cross-reference comment for multi-line script actions.
+  // A multi-line script action produces `// → Sheet_Event<N>_Act<I>` in the output,
+  // so we can assert the exact eventNumber shows up.
+  it("eventNumber threading — multi-line script action cross-ref embeds the eventNumber", () => {
+    const scriptAction: ScriptAction = {
+      type: "script",
+      language: "typescript",
+      script: ["const x = 1;", "console.log(x);"],
+    };
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [scriptAction],
+      sid: 100,
+    };
+    const lines7 = renderNodeSelf(event, "", "MySheet", 7);
+    const joined7 = lines7.join("\n");
+    assert.include(joined7, "MySheet_Event7_Act1");
+
+    const lines42 = renderNodeSelf(event, "", "MySheet", 42);
+    const joined42 = lines42.join("\n");
+    assert.include(joined42, "MySheet_Event42_Act1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderSubtree — new seam added in P1
+// ---------------------------------------------------------------------------
+
+describe("renderSubtree", () => {
+  it("two sibling top-level events — single blank line between them, none trailing", () => {
+    const comment: CommentEvent = { eventType: "comment", text: "Setup" };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "hi" } }],
+      sid: 100,
+    };
+    const { lines } = renderSubtree([comment, block], "Test", 1);
+    assert.deepEqual(lines, [
+      "// Setup",
+      "",
+      "block",
+      "  when: System.on-start-of-layout()",
+      "  do: Label.set-text(text=hi)",
+    ]);
+  });
+
+  it("block with actions AND children — blank line between actions and first child", () => {
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "is-visible", objectClass: "Sprite", sid: 3 }],
+      actions: [{ id: "destroy", objectClass: "Sprite", sid: 4 }],
+      sid: 101,
+    };
+    const parent: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
+      sid: 100,
+      children: [child],
+    };
+    const { lines } = renderSubtree([parent], "Test", 1);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: System.on-start-of-layout()",
+      "  do: Label.set-text(text=0)",
+      "",
+      "  block",
+      "    when: Sprite.is-visible()",
+      "    do: Sprite.destroy()",
+    ]);
+  });
+
+  it("block with conditions only (no actions) AND children — blank line before first child", () => {
+    // Conditions count as content; a blank is still inserted before the first child.
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "is-visible", objectClass: "Sprite", sid: 3 }],
+      actions: [{ id: "destroy", objectClass: "Sprite", sid: 4 }],
+      sid: 101,
+    };
+    const parent: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-end-of-layout", objectClass: "System", sid: 1 }],
+      actions: [],
+      sid: 100,
+      children: [child],
+    };
+    const { lines } = renderSubtree([parent], "Test", 1);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: System.on-end-of-layout()",
+      "",
+      "  block",
+      "    when: Sprite.is-visible()",
+      "    do: Sprite.destroy()",
+    ]);
+  });
+
+  it("group with children — children follow with NO blank separator before the first child", () => {
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: '"hello"' } }],
+      sid: 100,
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "UI Setup",
+      isActiveOnStart: true,
+      children: [child],
+      sid: 200,
+    };
+    const { lines } = renderSubtree([group], "Test", 1);
+    // Group header is immediately followed by indented child — no blank line in between
+    assert.deepEqual(lines, [
+      'group "UI Setup" (active)',
+      "  block",
+      "    when: System.on-start-of-layout()",
+      '    do: Label.set-text(text="hello")',
+    ]);
+    // Confirm no blank line appears anywhere
+    assert.notInclude(lines, "");
+  });
+
+  it("dslLineNumber — startLine=1: events' index dslLineNumber matches actual line positions", () => {
+    // event 0: comment "Setup" → 1 line (line 1)
+    // blank separator                    (line 2)
+    // event 1: block with 1 cond + 1 act → starts at line 3
+    const comment: CommentEvent = { eventType: "comment", text: "Setup" };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
+      sid: 100,
+    };
+    const { lines, index } = renderSubtree([comment, block], "Test", 1);
+
+    // Verify the actual positions in the lines array (0-indexed in array, 1-indexed in DSL)
+    assert.equal(lines[0], "// Setup"); // line 1
+    assert.equal(lines[1], ""); // blank
+    assert.equal(lines[2], "block"); // line 3
+
+    assert.equal(index.length, 2);
+    assert.equal(index[0].dslLineNumber, 1); // comment at line 1
+    assert.equal(index[1].dslLineNumber, 3); // block at line 3
+  });
+
+  it("dslLineNumber — non-1 startLine offsets all index entries", () => {
+    // Simulate that the sheet header already consumed lines 1-3, so events start at line 4.
+    const comment: CommentEvent = { eventType: "comment", text: "A note" };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [],
+      sid: 100,
+    };
+    const { index } = renderSubtree([comment, block], "Test", 4);
+
+    // comment at line 4; blank at 5; block at line 6
+    assert.equal(index[0].dslLineNumber, 4);
+    assert.equal(index[1].dslLineNumber, 6);
+  });
+
+  it("dslLineNumber — multi-line comment shifts subsequent event's line number correctly", () => {
+    // comment with 3 lines (lines 1-3) + blank (4) → block at 5
+    const comment: CommentEvent = {
+      eventType: "comment",
+      text: "Line 1\nLine 2\nLine 3",
+    };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "test", objectClass: "System", sid: 1 }],
+      actions: [],
+      sid: 100,
+    };
+    const { index } = renderSubtree([comment, block], "Test", 1);
+    assert.equal(index[0].dslLineNumber, 1);
+    assert.equal(index[1].dslLineNumber, 5);
+  });
+
+  it("index entry fields — eventNumber, jsonPath, sid, description are populated correctly", () => {
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "count",
+      type: "number",
+      initialValue: "0",
+      isStatic: false,
+      isConstant: false,
+      sid: 1,
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "MyGroup",
+      isActiveOnStart: true,
+      children: [],
+      sid: 200,
+    };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [],
+      sid: 100,
+    };
+    const { index } = renderSubtree([variable, group, block], "Test", 1);
+
+    assert.equal(index.length, 3);
+
+    // variable: non-counting, no sid in description but has sid field
+    assert.equal(index[0].jsonPath, "events[0]");
+    assert.equal(index[0].eventNumber, null);
+    assert.equal(index[0].sid, 1);
+    assert.equal(index[0].description, "var count: number = 0");
+
+    // group: counting (eventNumber 1)
+    assert.equal(index[1].jsonPath, "events[1]");
+    assert.equal(index[1].eventNumber, 1);
+    assert.equal(index[1].sid, 200);
+    assert.equal(index[1].description, 'group "MyGroup"');
+
+    // block: counting (eventNumber 2, follows group which was 1)
+    assert.equal(index[2].jsonPath, "events[2]");
+    assert.equal(index[2].eventNumber, 2);
+    assert.equal(index[2].sid, 100);
+    assert.equal(index[2].description, "block");
+  });
+
+  it("index entry jsonPath — nested children get correct paths", () => {
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [],
+      sid: 101,
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "MyGroup",
+      isActiveOnStart: true,
+      children: [child],
+      sid: 200,
+    };
+    const { index } = renderSubtree([group], "Test", 1);
+
+    assert.equal(index.length, 2);
+    assert.equal(index[0].jsonPath, "events[0]");
+    assert.equal(index[1].jsonPath, "events[0].children[0]");
+  });
+
+  it("index entry jsonPath — deeply nested (group > group > block) yields correct chain", () => {
+    // Ported from DslIndexEntry generation: block inside group inside group.
+    const innerBlock: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [],
+      sid: 103,
+    };
+    const innerGroup: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "Inner",
+      isActiveOnStart: true,
+      children: [innerBlock],
+      sid: 201,
+    };
+    const outerGroup: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "Outer",
+      isActiveOnStart: true,
+      children: [innerGroup],
+      sid: 200,
+    };
+    const { index } = renderSubtree([outerGroup], "Test", 1);
+
+    assert.equal(index.length, 3);
+    assert.equal(index[0].jsonPath, "events[0]");
+    assert.equal(index[1].jsonPath, "events[0].children[0]");
+    assert.equal(index[2].jsonPath, "events[0].children[0].children[0]");
+  });
+
+  it("index entry description — correct format for each event type", () => {
+    // Ported from DslIndexEntry generation — verifies description strings for all types.
+    const include: IncludeEvent = { eventType: "include", includeSheet: "OtherSheet" };
+    const comment1: CommentEvent = { eventType: "comment", text: "A note" };
+    const comment2: CommentEvent = { eventType: "comment", text: "Line one\nLine two" };
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "hp",
+      type: "number",
+      initialValue: "100",
+      isStatic: false,
+      isConstant: false,
+      sid: 1,
+    };
+    const block: BlockEvent = { eventType: "block", conditions: [], actions: [], sid: 10 };
+    const orBlock: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [],
+      sid: 11,
+      isOrBlock: true,
+    } as BlockEvent;
+    const grp: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "Grp",
+      isActiveOnStart: true,
+      children: [],
+      sid: 12,
+    };
+    const fnBlock: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "doStuff",
+      functionReturnType: "none",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [],
+      conditions: [],
+      actions: [],
+      sid: 13,
+    };
+    const aceBlock: CustomAceBlockEvent = {
+      eventType: "custom-ace-block",
+      aceType: "condition",
+      aceName: "Check",
+      objectClass: "Plug",
+      functionReturnType: "boolean",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [],
+      conditions: [],
+      actions: [],
+      sid: 14,
+    };
+
+    const { index } = renderSubtree(
+      [include, comment1, comment2, variable, block, orBlock, grp, fnBlock, aceBlock],
+      "T",
+      1,
+    );
+
+    assert.equal(index[0].description, "include OtherSheet");
+    assert.equal(index[1].description, "// A note");
+    assert.equal(index[2].description, "// Line one..."); // multi-line truncated
+    assert.equal(index[3].description, "var hp: number = 100");
+    assert.equal(index[4].description, "block");
+    assert.equal(index[5].description, "block [OR]");
+    assert.equal(index[6].description, 'group "Grp"');
+    assert.equal(index[7].description, "function doStuff()");
+    assert.equal(index[8].description, "ace Plug.Check()");
+  });
+
+  it("index entry eventNumber — non-counting events get null; counting events are sequential", () => {
+    // Ported from DslIndexEntry generation: variable + block1 + block2 inside a group.
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "count",
+      type: "number",
+      initialValue: "0",
+      isStatic: false,
+      isConstant: false,
+      sid: 1,
+    };
+    const block1: BlockEvent = { eventType: "block", conditions: [], actions: [], sid: 100 };
+    const block2: BlockEvent = { eventType: "block", conditions: [], actions: [], sid: 101 };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "Numbering",
+      isActiveOnStart: true,
+      children: [variable, block1, block2],
+      sid: 200,
+    };
+
+    const { index } = renderSubtree([group], "Test", 1);
+
+    // group=1, variable=null, block1=2, block2=3
+    assert.equal(index[0].eventNumber, 1); // group
+    assert.equal(index[1].eventNumber, null); // variable
+    assert.equal(index[2].eventNumber, 2); // block1
+    assert.equal(index[3].eventNumber, 3); // block2
+  });
+
+  it("single empty event list — returns empty lines and empty index", () => {
+    const { lines, index } = renderSubtree([], "Test", 1);
+    assert.deepEqual(lines, []);
+    assert.deepEqual(index, []);
   });
 });

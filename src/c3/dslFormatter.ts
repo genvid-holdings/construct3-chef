@@ -406,14 +406,155 @@ function formatCustomAceBlock(
 }
 
 /**
+ * Build a DslIndexEntry for a single event from visitEvents context.
+ */
+function buildIndexEntry(
+  event: EventSheetEvent,
+  jsonPath: string,
+  dslLineNumber: number,
+  eventNumber: number | null,
+  sheetName: string,
+): DslIndexEntry {
+  switch (event.eventType) {
+    case "include":
+      return {
+        eventNumber: null,
+        jsonPath,
+        dslLineNumber,
+        description: `include ${event.includeSheet}`,
+      };
+
+    case "comment": {
+      const commentLines = normalizeLineEndings(event.text).split("\n");
+      const firstLine = commentLines[0];
+      const description = commentLines.length > 1 ? `// ${firstLine}...` : `// ${firstLine}`;
+      return {
+        eventNumber: null,
+        jsonPath,
+        dslLineNumber,
+        description,
+      };
+    }
+
+    case "variable":
+      return {
+        eventNumber: null,
+        jsonPath,
+        dslLineNumber,
+        description: formatVariableDescription(event),
+        sid: event.sid,
+      };
+
+    case "group":
+      return {
+        eventNumber,
+        jsonPath,
+        dslLineNumber,
+        description: `group "${event.title}"`,
+        sid: event.sid,
+      };
+
+    case "block": {
+      const flags: string[] = [];
+      if (event.isOrBlock === true) flags.push("OR");
+      if (event.disabled === true) flags.push("DISABLED");
+      const flagStr = flags.length > 0 ? ` [${flags.join(", ")}]` : "";
+      return {
+        eventNumber,
+        jsonPath,
+        dslLineNumber,
+        description: `block${flagStr}`,
+        sid: event.sid,
+        searchText: buildBlockSearchText(event, { name: sheetName } as EventSheet, eventNumber ?? 0),
+      };
+    }
+
+    case "function-block":
+      return {
+        eventNumber,
+        jsonPath,
+        dslLineNumber,
+        description: `function ${event.functionName}()`,
+        sid: event.sid,
+        searchText: buildBlockSearchText(event, { name: sheetName } as EventSheet, eventNumber ?? 0),
+      };
+
+    case "custom-ace-block":
+      return {
+        eventNumber,
+        jsonPath,
+        dslLineNumber,
+        description: `ace ${event.objectClass}.${event.aceName}()`,
+        sid: event.sid,
+        searchText: buildBlockSearchText(event, { name: sheetName } as EventSheet, eventNumber ?? 0),
+      };
+  }
+}
+
+/**
+ * Drive a visitEvents pass over `events`, pushing rendered DSL lines into
+ * `output` (mutated in place) and collecting DslIndexEntry objects.
+ *
+ * @param events    - The event array to walk.
+ * @param sheetName - Name of the containing event sheet.
+ * @param output    - Accumulator array; may be pre-seeded (e.g. with sheet headers).
+ * @param baseLine  - The 1-indexed line number to treat as offset 0 of `output`
+ *                    at the point this function is called.  A node's dslLineNumber
+ *                    = baseLine + output.length (captured before pushing its lines).
+ */
+function renderEventsInto(
+  events: EventSheetEvent[],
+  sheetName: string,
+  output: string[],
+  baseLine: number,
+): DslIndexEntry[] {
+  const index: DslIndexEntry[] = [];
+  // depth-keyed flag: does this depth's first child need a leading blank line?
+  const parentNeedsChildSeparator: boolean[] = [];
+
+  visitEvents(events, (event, ctx) => {
+    // Blank-line rules (mutually exclusive):
+    // 1. Blank between siblings at any depth (ctx.index > 0)
+    // 2. Blank between a parent's actions/conditions and its first child
+    if (ctx.index > 0) {
+      output.push(""); // blank between siblings
+    } else if (ctx.depth > 0 && parentNeedsChildSeparator[ctx.depth]) {
+      output.push(""); // blank before first child of a block-like with content
+    }
+
+    // Capture dslLineNumber AFTER blanks, BEFORE this node's own lines
+    const dslLineNumber = baseLine + output.length;
+    const eventNumber = ctx.eventNumber;
+
+    // Render this node's own lines (no children, no blanks)
+    output.push(...renderNodeSelf(event, "  ".repeat(ctx.depth), sheetName, eventNumber ?? 0));
+
+    // Build index entry
+    index.push(buildIndexEntry(event, ctx.jsonPath, dslLineNumber, eventNumber, sheetName));
+
+    // Set flag for this node's first child:
+    // block-like nodes need a separator iff they have actions or conditions
+    const t = event.eventType;
+    if (t === "block" || t === "function-block" || t === "custom-ace-block") {
+      parentNeedsChildSeparator[ctx.depth + 1] =
+        (event as BlockEvent | FunctionBlockEvent | CustomAceBlockEvent).actions.length > 0 ||
+        (event as BlockEvent | FunctionBlockEvent | CustomAceBlockEvent).conditions.length > 0;
+    } else {
+      // groups and non-counting nodes never separate before their first child
+      parentNeedsChildSeparator[ctx.depth + 1] = false;
+    }
+  });
+
+  return index;
+}
+
+/**
  * Render a subtree of events into DSL lines plus index entries.
  *
- * Thin shim over the existing `formatEvent` path — produces the same lines and
- * index entries that `formatEventSheet` would for these top-level events, starting
- * at the given `startLine` (1-indexed).  Blank lines between siblings are
- * inserted exactly as in the top-level loop, with no trailing blank pushed.
- *
- * This shim is replaced in F1; keep it minimal.
+ * Drives a visitEvents pass starting at `startLine`, producing the same lines
+ * and index entries that `formatEventSheet` would for these top-level events.
+ * Blank lines between siblings are inserted exactly as in the top-level loop,
+ * with no trailing blank pushed.
  *
  * @param events    - The top-level event array to render.
  * @param sheetName - Name of the containing event sheet.
@@ -424,25 +565,9 @@ export function renderSubtree(
   sheetName: string,
   startLine: number,
 ): { lines: string[]; index: DslIndexEntry[] } {
-  const counter: EventCounter = { value: 0 };
-  const index: DslIndexEntry[] = [];
-  const lines: string[] = [];
-  let currentLine = startLine;
-
-  for (let i = 0; i < events.length; i++) {
-    const event = events[i];
-    const jsonPath = `events[${i}]`;
-    const eventLines = formatEvent(event, "", sheetName, counter, jsonPath, currentLine, index);
-    lines.push(...eventLines);
-    currentLine += eventLines.length;
-    // Add blank line between sibling events (but not after the last one)
-    if (i < events.length - 1) {
-      lines.push("");
-      currentLine += 1;
-    }
-  }
-
-  return { lines, index };
+  const output: string[] = [];
+  const index = renderEventsInto(events, sheetName, output, startLine);
+  return { lines: output, index };
 }
 
 /**
@@ -468,23 +593,9 @@ export function formatEventSheet(sheet: EventSheet, sourcePath: string): DslResu
   lines.push(`# Source: ${relPath}`);
   lines.push("");
 
-  const counter: EventCounter = { value: 0 };
-  const indexEntries: DslIndexEntry[] = [];
-  // Header is 3 lines (name, source, blank), events start at line 4
-  let currentLine = 4;
-
-  for (let i = 0; i < sheet.events.length; i++) {
-    const event = sheet.events[i];
-    const jsonPath = `events[${i}]`;
-    const eventLines = formatEvent(event, "", sheet.name, counter, jsonPath, currentLine, indexEntries);
-    lines.push(...eventLines);
-    currentLine += eventLines.length;
-    // Add blank line between top-level events (but not after the last one)
-    if (i < sheet.events.length - 1) {
-      lines.push("");
-      currentLine += 1;
-    }
-  }
+  // Header is 3 lines (name, source, blank), events start at line 4.
+  // Pass baseLine=1 so that the first event's dslLineNumber = 1 + lines.length = 1 + 3 = 4.
+  const indexEntries = renderEventsInto(sheet.events, sheet.name, lines, 1);
 
   // Ensure trailing newline
   lines.push("");

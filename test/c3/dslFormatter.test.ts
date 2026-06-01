@@ -20,6 +20,8 @@ import {
   filterIndex,
   buildShallowSidMap,
   buildBlockSearchText,
+  renderNodeSelf,
+  renderSubtree,
   SEARCH_SENTINEL,
   type EventCounter,
   type DslIndexEntry,
@@ -1891,5 +1893,431 @@ describe("buildBlockSearchText", () => {
     const result = buildBlockSearchText(event, makeSheet(), 1);
     assert.include(result, "System.on-start-of-layout");
     assert.include(result, "BattleLayout");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderNodeSelf — new seam added in P1
+// ---------------------------------------------------------------------------
+
+describe("renderNodeSelf", () => {
+  it("include event — returns single include line", () => {
+    const event: IncludeEvent = { eventType: "include", includeSheet: "CommonEvents" };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["include CommonEvents"]);
+  });
+
+  it("comment event (single-line) — returns single // line", () => {
+    const event: CommentEvent = { eventType: "comment", text: "Load data to header" };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["// Load data to header"]);
+  });
+
+  it("comment event (multi-line) — returns one // line per source line", () => {
+    const event: CommentEvent = {
+      eventType: "comment",
+      text: "Login support:\nA custom ID is saved in local storage.\nAfter login, it is linked to that account.",
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, [
+      "// Login support:",
+      "// A custom ID is saved in local storage.",
+      "// After login, it is linked to that account.",
+    ]);
+  });
+
+  it("variable event (const) — returns the formatted variable line", () => {
+    const event: EventSheetVariable = {
+      eventType: "variable",
+      name: "MAX_ITEMS",
+      type: "number",
+      initialValue: "10",
+      isStatic: false,
+      isConstant: true,
+      sid: 123,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["const MAX_ITEMS: number = 10"]);
+  });
+
+  it("group event — returns single group header line with active state", () => {
+    const event: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "UI Setup",
+      isActiveOnStart: true,
+      children: [],
+      sid: 200,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ['group "UI Setup" (active)']);
+  });
+
+  it("group event (disabled, inactive) — returns header with [DISABLED] and (inactive)", () => {
+    const event: GroupEvent = {
+      eventType: "group",
+      disabled: true,
+      title: "Debug",
+      isActiveOnStart: false,
+      children: [],
+      sid: 700,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ['group "Debug" [DISABLED] (inactive)']);
+  });
+
+  it("block event — returns header + when: condition + do: action lines", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "ScoreText", sid: 2, parameters: { text: "0" } }],
+      sid: 100,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["block", "  when: System.on-start-of-layout()", "  do: ScoreText.set-text(text=0)"]);
+  });
+
+  it("block event WITH children — returns ONLY own header/when:/do: lines, no child content", () => {
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "is-visible", objectClass: "Sprite", sid: 3 }],
+      actions: [{ id: "destroy", objectClass: "Sprite", sid: 4 }],
+      sid: 101,
+    };
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
+      sid: 100,
+      children: [child],
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    // Own lines only: header + when: + do:
+    assert.deepEqual(lines, ["block", "  when: System.on-start-of-layout()", "  do: Label.set-text(text=0)"]);
+    // Must not contain child content
+    assert.notInclude(lines.join("\n"), "Sprite");
+    assert.notInclude(lines.join("\n"), "is-visible");
+    assert.notInclude(lines.join("\n"), "destroy");
+  });
+
+  it("function-block event — returns header + do: action line", () => {
+    const event: FunctionBlockEvent = {
+      eventType: "function-block",
+      functionName: "getScore",
+      functionReturnType: "number",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [
+        { name: "level", type: "number", initialValue: "1", sid: 10 },
+        { name: "name", type: "string", initialValue: '""', sid: 11 },
+      ],
+      conditions: [],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
+      sid: 300,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, [
+      'function getScore(level: number = 1, name: string = "") -> number',
+      "  do: Label.set-text(text=0)",
+    ]);
+  });
+
+  it("custom-ace-block event — returns header line", () => {
+    const event: CustomAceBlockEvent = {
+      eventType: "custom-ace-block",
+      aceType: "condition",
+      aceName: "IsReady",
+      objectClass: "MyPlugin",
+      functionReturnType: "boolean",
+      functionCopyPicked: false,
+      functionIsAsync: false,
+      functionParameters: [{ name: "id", type: "number", initialValue: "0", sid: 20 }],
+      conditions: [],
+      actions: [],
+      sid: 500,
+    };
+    const lines = renderNodeSelf(event, "", "Test", 1);
+    assert.deepEqual(lines, ["ace MyPlugin.IsReady(id: number = 0) -> boolean"]);
+  });
+
+  it("indentation — all own lines are prefixed with the given indent", () => {
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "destroy", objectClass: "Sprite", sid: 2 }],
+      sid: 100,
+    };
+    const lines = renderNodeSelf(event, "  ", "Test", 1);
+    assert.deepEqual(lines, [
+      "  block",
+      "    when: System.on-start-of-layout()",
+      "    do: Sprite.destroy()",
+    ]);
+  });
+
+  it("indentation — include and comment lines also receive the prefix", () => {
+    const include: IncludeEvent = { eventType: "include", includeSheet: "CommonEvents" };
+    const comment: CommentEvent = { eventType: "comment", text: "First line\nSecond line" };
+    assert.deepEqual(renderNodeSelf(include, "    ", "Test", 1), ["    include CommonEvents"]);
+    assert.deepEqual(renderNodeSelf(comment, "    ", "Test", 1), ["    // First line", "    // Second line"]);
+  });
+
+  // eventNumber threading: renderNodeSelf passes `eventNumber` to formatAction,
+  // which embeds it in the cross-reference comment for multi-line script actions.
+  // A multi-line script action produces `// → Sheet_Event<N>_Act<I>` in the output,
+  // so we can assert the exact eventNumber shows up.
+  it("eventNumber threading — multi-line script action cross-ref embeds the eventNumber", () => {
+    const scriptAction: ScriptAction = {
+      type: "script",
+      language: "typescript",
+      script: ["const x = 1;", "console.log(x);"],
+    };
+    const event: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [scriptAction],
+      sid: 100,
+    };
+    const lines7 = renderNodeSelf(event, "", "MySheet", 7);
+    const joined7 = lines7.join("\n");
+    assert.include(joined7, "MySheet_Event7_Act1");
+
+    const lines42 = renderNodeSelf(event, "", "MySheet", 42);
+    const joined42 = lines42.join("\n");
+    assert.include(joined42, "MySheet_Event42_Act1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderSubtree — new seam added in P1
+// ---------------------------------------------------------------------------
+
+describe("renderSubtree", () => {
+  it("two sibling top-level events — single blank line between them, none trailing", () => {
+    const comment: CommentEvent = { eventType: "comment", text: "Setup" };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "hi" } }],
+      sid: 100,
+    };
+    const { lines } = renderSubtree([comment, block], "Test", 1);
+    assert.deepEqual(lines, [
+      "// Setup",
+      "",
+      "block",
+      "  when: System.on-start-of-layout()",
+      "  do: Label.set-text(text=hi)",
+    ]);
+  });
+
+  it("block with actions AND children — blank line between actions and first child", () => {
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "is-visible", objectClass: "Sprite", sid: 3 }],
+      actions: [{ id: "destroy", objectClass: "Sprite", sid: 4 }],
+      sid: 101,
+    };
+    const parent: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
+      sid: 100,
+      children: [child],
+    };
+    const { lines } = renderSubtree([parent], "Test", 1);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: System.on-start-of-layout()",
+      "  do: Label.set-text(text=0)",
+      "",
+      "  block",
+      "    when: Sprite.is-visible()",
+      "    do: Sprite.destroy()",
+    ]);
+  });
+
+  it("block with conditions only (no actions) AND children — blank line before first child", () => {
+    // Conditions count as content; a blank is still inserted before the first child.
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "is-visible", objectClass: "Sprite", sid: 3 }],
+      actions: [{ id: "destroy", objectClass: "Sprite", sid: 4 }],
+      sid: 101,
+    };
+    const parent: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-end-of-layout", objectClass: "System", sid: 1 }],
+      actions: [],
+      sid: 100,
+      children: [child],
+    };
+    const { lines } = renderSubtree([parent], "Test", 1);
+    assert.deepEqual(lines, [
+      "block",
+      "  when: System.on-end-of-layout()",
+      "",
+      "  block",
+      "    when: Sprite.is-visible()",
+      "    do: Sprite.destroy()",
+    ]);
+  });
+
+  it("group with children — children follow with NO blank separator before the first child", () => {
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: '"hello"' } }],
+      sid: 100,
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "UI Setup",
+      isActiveOnStart: true,
+      children: [child],
+      sid: 200,
+    };
+    const { lines } = renderSubtree([group], "Test", 1);
+    // Group header is immediately followed by indented child — no blank line in between
+    assert.deepEqual(lines, [
+      'group "UI Setup" (active)',
+      "  block",
+      "    when: System.on-start-of-layout()",
+      '    do: Label.set-text(text="hello")',
+    ]);
+    // Confirm no blank line appears anywhere
+    assert.notInclude(lines, "");
+  });
+
+  it("dslLineNumber — startLine=1: events' index dslLineNumber matches actual line positions", () => {
+    // event 0: comment "Setup" → 1 line (line 1)
+    // blank separator                    (line 2)
+    // event 1: block with 1 cond + 1 act → starts at line 3
+    const comment: CommentEvent = { eventType: "comment", text: "Setup" };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "on-start-of-layout", objectClass: "System", sid: 1 }],
+      actions: [{ id: "set-text", objectClass: "Label", sid: 2, parameters: { text: "0" } }],
+      sid: 100,
+    };
+    const { lines, index } = renderSubtree([comment, block], "Test", 1);
+
+    // Verify the actual positions in the lines array (0-indexed in array, 1-indexed in DSL)
+    assert.equal(lines[0], "// Setup"); // line 1
+    assert.equal(lines[1], ""); // blank
+    assert.equal(lines[2], "block"); // line 3
+
+    assert.equal(index.length, 2);
+    assert.equal(index[0].dslLineNumber, 1); // comment at line 1
+    assert.equal(index[1].dslLineNumber, 3); // block at line 3
+  });
+
+  it("dslLineNumber — non-1 startLine offsets all index entries", () => {
+    // Simulate that the sheet header already consumed lines 1-3, so events start at line 4.
+    const comment: CommentEvent = { eventType: "comment", text: "A note" };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [],
+      sid: 100,
+    };
+    const { index } = renderSubtree([comment, block], "Test", 4);
+
+    // comment at line 4; blank at 5; block at line 6
+    assert.equal(index[0].dslLineNumber, 4);
+    assert.equal(index[1].dslLineNumber, 6);
+  });
+
+  it("dslLineNumber — multi-line comment shifts subsequent event's line number correctly", () => {
+    // comment with 3 lines (lines 1-3) + blank (4) → block at 5
+    const comment: CommentEvent = {
+      eventType: "comment",
+      text: "Line 1\nLine 2\nLine 3",
+    };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [{ id: "test", objectClass: "System", sid: 1 }],
+      actions: [],
+      sid: 100,
+    };
+    const { index } = renderSubtree([comment, block], "Test", 1);
+    assert.equal(index[0].dslLineNumber, 1);
+    assert.equal(index[1].dslLineNumber, 5);
+  });
+
+  it("index entry fields — eventNumber, jsonPath, sid, description are populated correctly", () => {
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "count",
+      type: "number",
+      initialValue: "0",
+      isStatic: false,
+      isConstant: false,
+      sid: 1,
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "MyGroup",
+      isActiveOnStart: true,
+      children: [],
+      sid: 200,
+    };
+    const block: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [],
+      sid: 100,
+    };
+    const { index } = renderSubtree([variable, group, block], "Test", 1);
+
+    assert.equal(index.length, 3);
+
+    // variable: non-counting, no sid in description but has sid field
+    assert.equal(index[0].jsonPath, "events[0]");
+    assert.equal(index[0].eventNumber, null);
+    assert.equal(index[0].sid, 1);
+    assert.equal(index[0].description, "var count: number = 0");
+
+    // group: counting (eventNumber 1)
+    assert.equal(index[1].jsonPath, "events[1]");
+    assert.equal(index[1].eventNumber, 1);
+    assert.equal(index[1].sid, 200);
+    assert.equal(index[1].description, 'group "MyGroup"');
+
+    // block: counting (eventNumber 2, follows group which was 1)
+    assert.equal(index[2].jsonPath, "events[2]");
+    assert.equal(index[2].eventNumber, 2);
+    assert.equal(index[2].sid, 100);
+    assert.equal(index[2].description, "block");
+  });
+
+  it("index entry jsonPath — nested children get correct paths", () => {
+    const child: BlockEvent = {
+      eventType: "block",
+      conditions: [],
+      actions: [],
+      sid: 101,
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "MyGroup",
+      isActiveOnStart: true,
+      children: [child],
+      sid: 200,
+    };
+    const { index } = renderSubtree([group], "Test", 1);
+
+    assert.equal(index.length, 2);
+    assert.equal(index[0].jsonPath, "events[0]");
+    assert.equal(index[1].jsonPath, "events[0].children[0]");
+  });
+
+  it("single empty event list — returns empty lines and empty index", () => {
+    const { lines, index } = renderSubtree([], "Test", 1);
+    assert.deepEqual(lines, []);
+    assert.deepEqual(index, []);
   });
 });

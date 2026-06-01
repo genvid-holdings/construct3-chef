@@ -1,6 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import path from "node:path";
-import { find_all_layouts_path, type Layout } from "@genvid/c3source";
+import { readFileSync } from "node:fs";
+import { find_all_files_path, find_all_layouts_path, type Layout } from "@genvid/c3source";
 
 /** Map from layoutName -> primary eventSheet name (from layout JSON) */
 export function buildLayoutEventSheetMap(layoutsDir: string): Record<string, string> {
@@ -25,28 +24,13 @@ export interface NavEntry {
   lineNumber: number; // 1-indexed line number in DSL file
 }
 
-function findDslFiles(dir: string): string[] {
-  const results: string[] = [];
-  const entries = readdirSync(dir).sort();
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry);
-    const stats = statSync(fullPath);
-    if (stats.isDirectory()) {
-      results.push(...findDslFiles(fullPath));
-    } else if (stats.isFile() && entry.endsWith(".dsl.txt")) {
-      results.push(fullPath);
-    }
-  }
-  return results;
-}
-
 // Matches a double-quoted layout name in a GoToLayout call:
 // e.g., GoToLayout("SomeLayout" or GoToLayout("SomeLayout", ...)
 const GOTO_LAYOUT_QUOTED_RE = /GoToLayout\("([^"]+)"/;
 
 /** Scan all .dsl.txt files under extractedDir for GoToLayout calls */
 export function findGoToLayoutCalls(extractedDir: string): NavEntry[] {
-  const dslFiles = findDslFiles(extractedDir);
+  const dslFiles = find_all_files_path(extractedDir, (filename) => filename.endsWith(".dsl.txt"));
   const entries: NavEntry[] = [];
 
   for (const dslFile of dslFiles) {

@@ -71,6 +71,8 @@ C3 identifies script blocks by a 1-indexed positional coordinate: `EventSheet, e
 
 Actions within a block are numbered 1-indexed within that block's `actions` array.
 
+> This table is **descriptive, not a spec the generators re-implement.** Since #27 the counter is owned by c3source's `visitEvents` (the `eventNumber` it yields) and its `isCountingEvent` predicate — the single authority for the counting rule. The DSL formatter (`src/c3/dslFormatter.ts`) drives its traversal through `visitEvents` and reads `ctx.eventNumber`; it does not maintain its own counter. If the increments-counter column ever looks wrong, the fix belongs upstream in c3source, not here.
+
 ---
 
 ## Cross-Referencing C3 Errors

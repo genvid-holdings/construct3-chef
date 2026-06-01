@@ -53,9 +53,13 @@ npx tsx src/cli.ts generate --project-dir test/fixtures/sample-project
 - **`@genvid/c3source`** — the C3 JSON domain layer: type definitions (`EventSheet`, `Condition`, `Layout`, …), file discovery (`find_all_eventsheets_path`), and primitives like `extractScriptsFromSheet`, `formatCondition`. Treat it as the source of truth for C3's on-disk schema.
 - **`@genvid/mcp-utils`** — MCP plumbing: `ReadWriteLock`, `ExpectedChanges`, `paginateText`, `exposeDocs`, `Logger`.
 
+**Adoption posture (the recurring "should this live upstream?" call).** Push **traversal, numbering, and discovery** into c3source — that's domain logic (`visitEvents`/`visitLayers`, the `isCountingEvent` event counter, the `find_all_*_path` finders). Keep **rendering/presentation** local — the `extracted/` read-surface (DSL text, index, layout summaries) is *this tool's* invention, not C3 on-disk schema, so it must not move upstream even when a c3source helper could shave a few lines. The split was settled in #27 (the DSL formatter drives traversal via `visitEvents` but renders locally) and guides the remaining adoption issues (#25/#26/#28). When a needed traversal/discovery primitive is missing upstream (e.g. #28 wanted a `.dsl.txt` file finder that c3source doesn't export), file an intent request on `genvid-holdings/c3source` rather than re-rolling it here.
+
 ## Module system gotchas
 
 ESM throughout (`"type": "module"`, `NodeNext`). **Relative imports must use the `.js` extension even though the files are `.ts`** (e.g. `import { foo } from "./generators.js"`). `strict` is on. Two tsconfigs: `tsconfig.json` (src-only, emits to `dist/`, used by build + typecheck) and `tsconfig.test.json` (adds `test/`, `noEmit` — exists for editors, not wired into the `typecheck` script).
+
+**Public-API surface = the `src/index.ts` barrel.** It re-exports each module wholesale (`export * from "./c3/dslFormatter.js"`, …), so *every exported symbol* a module declares becomes published API the moment it ships in `dist/`. Deleting or renaming an exported function/type/interface is therefore **semver-breaking** even when nothing inside the repo still imports it (e.g. #27 removed the unused-internally `formatEvent`/`EventCounter` — breaking for any consumer importing them from `@genvid/construct3-chef`). At `0.x` this is acceptable; note such removals in the commit body and flag them at the next release tag (see [Releasing](#releasing)). To keep a symbol internal, don't re-export its module from `src/index.ts`.
 
 ## The two-surface data model
 
@@ -110,6 +114,8 @@ Squash-merged PRs carry a `(#N)` suffix on the subject (added by the merge), e.g
 ## Pull Request Format
 
 Host is **GitHub** (`gh` CLI). PR title follows the same Conventional Commit shape as the squash subject. The body should summarize what changed and why, call out verification done (lint/typecheck/test), and note any follow-ups. When generated with Claude Code, append the `🤖 Generated with [Claude Code](https://claude.com/claude-code)` footer.
+
+**Put `Closes #N` (or `Fixes #N`) in the PR body** for every issue the PR fully resolves — one per issue — so the squash-merge auto-closes them. The `(#N)` *subject* suffix that squash-merging adds is **not** a closing keyword: it only links, it doesn't close. (This is how #19/#20 ended up implemented-but-open — their squash subjects referenced the issues but no body carried `Closes`.) For work that's blocked on or split across other issues, link them in prose instead of `Closes` so they stay open.
 
 ## Branching
 

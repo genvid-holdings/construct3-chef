@@ -1,4 +1,4 @@
-import type { Layout, Layer, Instance } from "@genvid/c3source";
+import { visitLayers, type Layout, type Layer, type Instance } from "@genvid/c3source";
 
 /**
  * Build a map of global layer name → source layout name.
@@ -11,7 +11,7 @@ export function buildGlobalLayerMap(layouts: Array<{ layout: Layout }>): Map<str
   const map = new Map<string, string>();
 
   for (const { layout } of layouts) {
-    visitLayersRecursive(layout.layers, (layer) => {
+    visitLayers(layout.layers, (layer) => {
       if (layer.global && !isOverriden(layer) && hasInstances(layer)) {
         if (map.has(layer.name)) {
           console.warn(
@@ -21,6 +21,7 @@ export function buildGlobalLayerMap(layouts: Array<{ layout: Layout }>): Map<str
           map.set(layer.name, layout.name);
         }
       }
+      return 0;
     });
   }
 
@@ -144,10 +145,11 @@ function isReplicaGroup(group: InstanceGroup): boolean {
 /** Build UID → Instance map across all layers and nonworld-instances in a layout. */
 function buildUidMap(layout: Layout): Map<number, Instance> {
   const map = new Map<number, Instance>();
-  visitLayersRecursive(layout.layers, (layer) => {
+  visitLayers(layout.layers, (layer) => {
     for (const inst of layer.instances ?? []) {
       map.set(inst.uid, inst);
     }
+    return 0;
   });
   for (const inst of layout["nonworld-instances"] ?? []) {
     map.set(inst.uid, inst);
@@ -482,7 +484,7 @@ export function buildGlobalLayerReport(layouts: Array<{ layout: Layout }>): Glob
   const overrideMap = new Map<string, string[]>();
 
   for (const { layout } of layouts) {
-    visitLayersRecursive(layout.layers, (layer) => {
+    visitLayers(layout.layers, (layer) => {
       if (layer.global && !isOverriden(layer) && hasInstances(layer)) {
         const existing = sourceMap.get(layer.name);
         if (existing) {
@@ -503,6 +505,7 @@ export function buildGlobalLayerReport(layouts: Array<{ layout: Layout }>): Glob
           overrideMap.set(layer.name, [layout.name]);
         }
       }
+      return 0;
     });
   }
 
@@ -578,9 +581,3 @@ export function formatContainersFile(containerGroups: string[][]): string {
   return lines.join("\n");
 }
 
-function visitLayersRecursive(layers: Layer[], visitor: (layer: Layer) => void): void {
-  for (const layer of layers) {
-    visitor(layer);
-    visitLayersRecursive(getSubLayers(layer), visitor);
-  }
-}

@@ -1,10 +1,25 @@
 // Layout mutation library — pure functions, no file I/O.
 
-import { makeDefaultLayer, addSceneGraphRoot, removeSceneGraphRoot, type Layout } from "@genvid/c3source";
+import {
+  makeDefaultLayer,
+  addSceneGraphRoot,
+  removeSceneGraphRoot,
+  findLayerByName,
+  findLayerEntry,
+  type Layout,
+  type Layer,
+  type Instance,
+} from "@genvid/c3source";
 
-export type LayoutJson = Record<string, unknown>;
-export type LayerJson = Record<string, unknown>;
-export type InstanceJson = Record<string, unknown>;
+// These were once local `Record<string, unknown>` aliases (a cast barrier that
+// forced `as unknown as Layout` at every c3source call site). They now alias
+// c3source's typed domain shapes directly — all three carry an index signature,
+// so existing `x as LayerJson[]` narrowing casts on loosely-typed fields still
+// compile, while c3source functions typed `(layers: Layer[])` accept them
+// without the double cast.
+export type LayoutJson = Layout;
+export type LayerJson = Layer;
+export type InstanceJson = Instance;
 
 export interface InstanceOverrides {
   x?: number;
@@ -24,70 +39,45 @@ export interface InstanceOverrides {
 /**
  * Recursively search through layout.layers and their subLayers to find a
  * layer by name. Returns null if not found.
+ *
+ * Delegates to c3source's early-exit `findLayerByName` (stops at the first
+ * match rather than walking the whole tree).
  */
 export function findLayer(
   layout: LayoutJson,
   layerName: string,
 ): LayerJson | null {
-  const layers = layout.layers as LayerJson[] | undefined;
+  const layers = layout.layers as Layer[] | undefined;
   if (!layers) return null;
-  return findLayerInList(layers, layerName);
-}
-
-function findLayerInList(
-  layers: LayerJson[],
-  layerName: string,
-): LayerJson | null {
-  for (const layer of layers) {
-    if (layer.name === layerName) return layer;
-    const subLayers = layer.subLayers as LayerJson[] | undefined;
-    if (subLayers) {
-      const found = findLayerInList(subLayers, layerName);
-      if (found) return found;
-    }
-  }
-  return null;
+  return findLayerByName(layers, layerName) ?? null;
 }
 
 /**
  * Remove an empty layer from the layout. Throws if the layer has instances or sublayers.
+ *
+ * Uses c3source's `findLayerEntry`, whose returned entry carries the sibling
+ * array (`parent`) and `index` for an in-place splice — no second walk to
+ * locate the layer's container.
  */
 export function removeLayer(layout: LayoutJson, layerName: string): void {
-  const layer = findLayer(layout, layerName);
-  if (!layer) {
+  const layers = layout.layers as Layer[] | undefined;
+  const entry = layers ? findLayerEntry(layers, (e) => e.name === layerName) : undefined;
+  if (!entry) {
     throw new Error(`removeLayer: layer "${layerName}" not found in layout`);
   }
-  const instances = layer.instances as unknown[] | undefined;
+  const instances = entry.layer.instances;
   if (instances && instances.length > 0) {
     throw new Error(
       `removeLayer: layer "${layerName}" has ${instances.length} instance(s) — remove them first`,
     );
   }
-  const subLayers = layer.subLayers as unknown[] | undefined;
+  const subLayers = entry.layer.subLayers;
   if (subLayers && subLayers.length > 0) {
     throw new Error(
       `removeLayer: layer "${layerName}" has ${subLayers.length} sublayer(s) — remove them first`,
     );
   }
-  const rootLayers = layout.layers as LayerJson[];
-  if (!removeLayerFromList(rootLayers, layer)) {
-    throw new Error(`removeLayer: could not remove layer "${layerName}" — internal error`);
-  }
-}
-
-function removeLayerFromList(layers: LayerJson[], target: LayerJson): boolean {
-  const idx = layers.indexOf(target);
-  if (idx !== -1) {
-    layers.splice(idx, 1);
-    return true;
-  }
-  for (const layer of layers) {
-    const subLayers = layer.subLayers as LayerJson[] | undefined;
-    if (subLayers && removeLayerFromList(subLayers, target)) {
-      return true;
-    }
-  }
-  return false;
+  entry.parent.splice(entry.index, 1);
 }
 
 /**
@@ -498,7 +488,7 @@ export function copyInstance(opts: {
   // 11. Register root's new SID in scene-graphs-folder-root (addSceneGraphRoot
   // creates the folder if the layout lacks one — it owns that invariant).
   const newRootSid = rootClone.sid as number;
-  addSceneGraphRoot(opts.targetLayout as unknown as Layout, newRootSid);
+  addSceneGraphRoot(opts.targetLayout, newRootSid);
 }
 
 // ---------------------------------------------------------------------------
@@ -779,7 +769,7 @@ export function removeInstance(layout: LayoutJson, typeName: string, layer?: str
   }
 
   // 5. Remove root's SID from scene-graphs-folder-root.items
-  removeSceneGraphRoot(layout as unknown as Layout, rootSid);
+  removeSceneGraphRoot(layout, rootSid);
 }
 
 // ---------------------------------------------------------------------------
@@ -834,7 +824,7 @@ export function moveInstance(opts: {
   }
 
   // 4. Remove original's SID from scene-graphs-folder-root.items
-  removeSceneGraphRoot(opts.layout as unknown as Layout, originalSid);
+  removeSceneGraphRoot(opts.layout, originalSid);
 }
 
 // ---------------------------------------------------------------------------

@@ -204,6 +204,21 @@ describe("syncC3Proj", () => {
       const result = readDiskDirNames(dir, false);
       assert.deepEqual(result.dirs, ["SubFolder"]);
     });
+
+    it("ignores the uistate directory when configured", () => {
+      const dir = createTmpDir();
+      mkdirSync(path.join(dir, "SubFolder"));
+      mkdirSync(path.join(dir, "uistate"));
+      const result = readDiskDirNames(dir, true);
+      assert.deepEqual(result.dirs, ["SubFolder"]);
+    });
+
+    it("includes the uistate directory when not ignoring", () => {
+      const dir = createTmpDir();
+      mkdirSync(path.join(dir, "uistate"));
+      const result = readDiskDirNames(dir, false);
+      assert.deepEqual(result.dirs, ["uistate"]);
+    });
   });
 
   describe("syncFileFolder", () => {
@@ -442,6 +457,22 @@ describe("syncC3Proj", () => {
 
       assert.equal(changes.length, 1);
       assert.deepEqual(folder.items, ["Layout1"]);
+    });
+
+    it("ignores the uistate subfolder (editor state) when configured", () => {
+      const dir = createTmpDir();
+      // Recent C3 editors persist instances-bar UI state under layouts/uistate/.
+      mkdirSync(path.join(dir, "uistate", "Level1"), { recursive: true });
+      writeFileSync(path.join(dir, "uistate", "Level1", "Bar.instancesBar.json"), "");
+
+      const folder: NameFolder = { items: [], subfolders: [] };
+      const changes: Change[] = [];
+      const config: NameSectionConfig = { key: "layouts", diskDir: dir, ignoreUistate: true };
+
+      syncNameFolder(folder, dir, "", config, changes, false);
+
+      assert.deepEqual(changes, []);
+      assert.deepEqual(folder.subfolders, []);
     });
 
     it("detects new subfolders on disk", () => {

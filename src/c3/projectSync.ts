@@ -194,6 +194,10 @@ export function readDiskDirNames(dirPath: string, ignoreUistate: boolean): DiskT
 
 	for (const entry of entries) {
 		if (entry.isDirectory()) {
+			// Recent C3 editors persist instances-bar UI state to a `uistate/`
+			// subfolder (e.g. layouts/uistate/**/*.instancesBar.json). It is
+			// local editor state, not C3 source, so skip it like *.uistate.json.
+			if (ignoreUistate && entry.name === "uistate") continue;
 			dirs.push(entry.name);
 		} else if (entry.isFile() && entry.name.endsWith(".json")) {
 			if (ignoreUistate && entry.name.endsWith(".uistate.json")) continue;

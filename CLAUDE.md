@@ -31,6 +31,16 @@ npm run build                           # tsc → dist/, then prepends a node sh
 
 There is no dev script for the CLI. Run it in-place with `npx tsx src/cli.ts <subcommand> --project-dir <path>` — tsx compiles the `.ts` on the fly, so no build is needed. The package's `main`/`types`/`exports` point at the built `dist/` (what published consumers import); the `construct3-chef` bin also only exists after `npm run build` (it points at `dist/cli.js`).
 
+### Releasing
+
+Cutting a release is a tag push, not a manual `npm publish`:
+
+1. Bump `package.json` `version` on a topic branch (`npm version X.Y.Z --no-git-tag-version`) and commit.
+2. PR → squash-merge to `main`.
+3. Tag the **merged** commit: `git tag vX.Y.Z` (annotated is fine) → `git push origin vX.Y.Z`.
+
+The `v*.*.*` tag triggers `.github/workflows/publish.yml`: the gate job runs `npm ci` + lint/typecheck/test/build/`publish --dry-run`, then the publish job runs `npm publish --provenance --access public` via OIDC trusted publishing (no stored npm token). **The publish job fails the "Verify tag matches package version" step if the tag minus its `v` ≠ `package.json` version** — so always tag the commit that already carries the bump (don't tag `main` before the bump merges). Released tags so far: `v0.1.0`, `v0.3.0` (npm `latest` = `0.3.0`; `0.2.0` was merged to `main` but never tagged, so it was never published).
+
 **Golden test.** `test/c3/sampleProjectGolden.test.ts` regenerates `extracted/` from the real-project fixture `test/fixtures/sample-project/` and diffs it against the committed golden (`…/extracted/`), guarding the generate→`extracted/` pipeline (esp. layout-summary `fullLayerName`/global composition + DSL coordinates). When a generator change *intentionally* alters output, regenerate the golden:
 ```bash
 npx tsx src/cli.ts generate --project-dir test/fixtures/sample-project

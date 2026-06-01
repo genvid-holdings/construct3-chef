@@ -301,9 +301,8 @@ function renderEventsInto(
     // block-like nodes need a separator iff they have actions or conditions
     const t = event.eventType;
     if (t === "block" || t === "function-block" || t === "custom-ace-block") {
-      parentNeedsChildSeparator[ctx.depth + 1] =
-        (event as BlockEvent | FunctionBlockEvent | CustomAceBlockEvent).actions.length > 0 ||
-        (event as BlockEvent | FunctionBlockEvent | CustomAceBlockEvent).conditions.length > 0;
+      const blockLike = event as BlockEvent | FunctionBlockEvent | CustomAceBlockEvent;
+      parentNeedsChildSeparator[ctx.depth + 1] = blockLike.actions.length > 0 || blockLike.conditions.length > 0;
     } else {
       // groups and non-counting nodes never separate before their first child
       parentNeedsChildSeparator[ctx.depth + 1] = false;

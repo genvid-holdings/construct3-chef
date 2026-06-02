@@ -19,8 +19,7 @@ map (§ "Where to read more").
 
 ## C3 platform reference (the *why* behind the gotchas)
 
-- `c3/README.md` — index of the C3 platform reference set
-- `c3/event-sheet-architecture.md` — event sheet JSON structure
-- `c3/layout-reference.md` — layout JSON structure (layers, instances, scene graph)
-- `c3/scripting-reference.md` — C3 scripting API
-- `c3/typescript-integration.md` — TS defs, the async/concurrency model
+C3 platform reference (event-sheet & layout JSON structure, the scripting API,
+the TS async/concurrency model) now lives in the **genvid-c3** Claude Code
+plugin at `${CLAUDE_PLUGIN_ROOT}/docs/c3/*`. construct3-chef owns the *tooling*
+docs above; the plugin owns the *platform* knowledge.

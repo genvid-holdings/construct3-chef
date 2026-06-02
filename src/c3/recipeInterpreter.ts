@@ -908,10 +908,17 @@ export function executeOp(
           _sidIndex.set(newSid, { node: expanded, parentArray: children, indexInParent: children.indexOf(expanded) });
         }
       } else if (typeof op.after === "string" && (op.after.startsWith("sid:") || op.after.startsWith("$"))) {
-        // `after: "sid:X"` or `after: "$symbol"` — insert after the referenced event
+        // `after: "sid:X"` or `after: "$symbol"` — insert after the referenced event.
+        // parentArray ref is stable, but indexInParent is a snapshot from buildSidIndex —
+        // earlier splices in the same batch shift siblings. Look up the current position
+        // (parity with the `in`+`after` branch above and remove-event below).
         const afterEntry = resolveEventRef(op.after, _sidIndex, _symbolTable);
         const parentArray = afterEntry.parentArray;
-        const insertIdx = afterEntry.indexInParent + 1;
+        const afterIdx = parentArray.indexOf(afterEntry.node);
+        if (afterIdx === -1) {
+          throw new Error(`insert-event: "after" ref "${op.after}" is no longer in its parent array`);
+        }
+        const insertIdx = afterIdx + 1;
         parentArray.splice(insertIdx, 0, expanded);
         // Update sidIndex registration
         if (newSid !== undefined) {

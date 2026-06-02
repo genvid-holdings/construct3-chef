@@ -785,7 +785,7 @@ npx construct3-chef apply-recipe <recipe.json> --no-regenerate  # Skip generate 
 | 31 | **`$symbol` refs only work for same-recipe inserts** | Pre-existing events are not in the symbol table. Use `"in": "sid:X"` for pre-existing events. |
 | 32 | **`matchAction` is a string, not an object** | `"matchAction": "myFunc"` — not `{ callFunction: "name" }`. |
 | 33 | **`callFunction` parameters: booleans are native, strings need C3 quoting** | `"parameters": [true, "\"LayerName\""]` — boolean params must be native booleans, string params must use inner quotes. |
-| 34 | **`insert-event` with SID-based `after` may silently append** | Verify the resulting position in DSL output. Known bug. |
+| 34 | **`insert-event` with SID-based `after` resolves the live position** | The `after: "sid:X"` insert looks up the target's *current* index, so it stays correct even when earlier ops in the same recipe batch shift siblings. (Previously used a stale `buildSidIndex` snapshot and could misplace/append; fixed.) |
 | 35 | **`matchAction` only matches actions, not conditions** | `patch-action-param`'s `matchAction` searches `actions` array only. To modify condition parameters, use `replace-condition`. |
 
 ---

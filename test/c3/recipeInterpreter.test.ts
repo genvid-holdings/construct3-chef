@@ -1831,6 +1831,25 @@ describe("SID-based addressing", () => {
     assert.deepStrictEqual(((sheet.events[2] as BlockEvent).actions[0] as ScriptAction).script, ["// inserted"]);
   });
 
+  it("after: 'sid:X' resolves the live position after earlier ops shift siblings", () => {
+    // Regression for gotcha #34: the bare `after: "sid:X"` branch must look up
+    // the target's current index, not a stale buildSidIndex snapshot. An earlier
+    // op in the same batch shifts every sibling by one; the snapshot index for
+    // sid:10 is now wrong, so the insert lands before sid:10 (or appends).
+    const sheet = makeSheet(makeBlock({ sid: 10 }), makeBlock({ sid: 20 }), makeBlock({ sid: 30 }));
+    executeFileOps(sidGen, sheet, [
+      { op: "insert-event", index: 0, block: { conditions: [], actions: [{ script: ["// front"] }] } },
+      { op: "insert-event", after: "sid:10", block: { conditions: [], actions: [{ script: ["// after-10"] }] } },
+    ]);
+    // expected order: [front, sid:10, after-10, sid:20, sid:30]
+    assert.equal(sheet.events.length, 5);
+    assert.deepStrictEqual(((sheet.events[0] as BlockEvent).actions[0] as ScriptAction).script, ["// front"]);
+    assert.equal(sheet.events[1].sid, 10);
+    assert.deepStrictEqual(((sheet.events[2] as BlockEvent).actions[0] as ScriptAction).script, ["// after-10"]);
+    assert.equal(sheet.events[3].sid, 20);
+    assert.equal(sheet.events[4].sid, 30);
+  });
+
   it("insert-event with in + after:'sid:X' inserts after the referenced child", () => {
     const child1 = makeBlock({ sid: 100 });
     const child2 = makeBlock({ sid: 200 });

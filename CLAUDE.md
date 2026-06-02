@@ -50,6 +50,8 @@ npx tsx src/cli.ts generate --project-dir test/fixtures/sample-project
 
 `@genvid/c3source` and `@genvid/mcp-utils` are public Genvid packages on npm; `npm install` fetches them from the registry like any other dependency. Versions are pinned in `package.json`. (These were once private tarballs pulled from Azure Blob via a `download-deps` + 1Password bootstrap; that machinery was retired when the packages went public — `git log` for the history.)
 
+> **Checking for a new upstream release:** use `npm view <pkg> version --prefer-online` (or check the package's GitHub tags). Plain `npm view` and the editor's "new version available" banner both read a *cached* registry index and lag fresh publishes — don't conclude you're current off the cached read when deciding whether to adopt.
+
 - **`@genvid/c3source`** — the C3 JSON domain layer: type definitions (`EventSheet`, `Condition`, `Layout`, …), file discovery (`find_all_eventsheets_path`), and primitives like `extractScriptsFromSheet`, `formatCondition`. Treat it as the source of truth for C3's on-disk schema.
 - **`@genvid/mcp-utils`** — MCP plumbing: `ReadWriteLock`, `ExpectedChanges`, `paginateText`, `exposeDocs`, `Logger`.
 

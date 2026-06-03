@@ -579,11 +579,17 @@ Removes a world instance and its scene graph children from the layout.
 
 ### remove-layer
 
-Removes an empty layer from the layout. Fails if the layer has instances or sublayers.
+Removes a layer from the layout.
+
+**Default (strict) mode:** fails if the layer has any instances or any sublayers.
+
+**Cascade mode** (`cascade: true`): removes the layer and its entire sublayer subtree. Still fails if any instance exists anywhere in the subtree unless `removeInstances: true` is also set. `removeInstances` without `cascade` is rejected by `validateRecipe`.
 
 | Field | Required | Description |
 | ----- | -------- | ----------- |
 | `layer` | yes | Layer name to remove |
+| `cascade` | no | `boolean` — remove the layer and its entire sublayer subtree (default: `false`) |
+| `removeInstances` | no | `boolean` — force-remove a subtree that contains instances; only valid with `cascade: true` (default: `false`) |
 
 ### move-instance
 
@@ -787,6 +793,7 @@ npx construct3-chef apply-recipe <recipe.json> --no-regenerate  # Skip generate 
 | 33 | **`callFunction` parameters: booleans are native, strings need C3 quoting** | `"parameters": [true, "\"LayerName\""]` — boolean params must be native booleans, string params must use inner quotes. |
 | 34 | **`insert-event` with SID-based `after` resolves the live position** | The `after: "sid:X"` insert looks up the target's *current* index, so it stays correct even when earlier ops in the same recipe batch shift siblings. (Previously used a stale `buildSidIndex` snapshot and could misplace/append; fixed.) |
 | 35 | **`matchAction` only matches actions, not conditions** | `patch-action-param`'s `matchAction` searches `actions` array only. To modify condition parameters, use `replace-condition`. |
+| 36 | **`removeInstances` on `remove-layer` is permanent** | `cascade: true, removeInstances: true` deletes every instance in the entire sublayer subtree with no undo. Verify the subtree is instance-free (or intentionally discarded) before applying. `removeInstances` without `cascade` is rejected by `validateRecipe`. |
 
 ---
 

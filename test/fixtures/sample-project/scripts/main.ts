@@ -10,7 +10,7 @@ runOnStartup(async runtime =>
 	runtime.addEventListener("beforeprojectstart", () => OnBeforeProjectStart(runtime));
 });
 
-async function OnBeforeProjectStart(runtime)
+async function OnBeforeProjectStart(runtime: IRuntime)
 {
 	// Code to run just before 'On start of layout' on
 	// the first layout. Loading has finished and initial
@@ -19,7 +19,7 @@ async function OnBeforeProjectStart(runtime)
 	runtime.addEventListener("tick", () => Tick(runtime));
 }
 
-function Tick(runtime)
+function Tick(runtime: IRuntime)
 {
 	// Code to run every tick
 }

@@ -1,6 +1,6 @@
 {
 	"projectFormatVersion": 1,
-	"savedWithRelease": 48700,
+	"savedWithRelease": 48702,
 	"name": "sample-project",
 	"runtime": "c3",
 	"useWorker": "auto",

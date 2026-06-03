@@ -126,6 +126,23 @@ In extracted `.ts` files, `localVars` always uses inline object types derived fr
 
 ---
 
+## Variable Scope Markers
+
+Event-variable **declarations** carry a scope marker in the DSL read surface (`.dsl.txt`, the `.dsl.idx.txt` Description column, and `read-event-sids`). A `variable` event at the event-sheet **root** is a **global**; nested inside a group/block it is **local**. Globals are rendered with a leading `global ` word before the `const`/`static`/`var` keyword; locals are unmarked:
+
+```
+global var score: number = 0      # sheet-root → global
+global static hp: number = 100
+global const MAX: number = 5
+var temp: number = 0              # nested in a group/block → local (no marker)
+```
+
+Scope is **positional**, not a flag — a sheet-root variable is global regardless of `isStatic`. The formatter derives it from `ctx.depth === 0` on the render path and from the absence of a `.children` segment in the jsonPath on the index/`read-event-sids` paths (the marker stays inside the Description column, so it does not disturb `resolve-anchor`'s positional parse). This is the same positional model the `move-variable` recipe op uses.
+
+> **Reference-site markers are not yet emitted.** `set-eventvar-value` / `compare-eventvar` *references* are not annotated with their target's scope. Doing so correctly needs the System eventvar ACE-id list (a C3 platform fact owned by c3source) plus shadowing-aware name→declaration resolution; it is deferred pending the [c3source#26](https://github.com/genvid-holdings/c3source/issues/26) classifier and tracked on [construct3-chef#58](https://github.com/genvid-holdings/construct3-chef/issues/58).
+
+---
+
 ## Generator Output Stability
 
 Generators that output to `extracted/` must produce deterministic output across platforms:

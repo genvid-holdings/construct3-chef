@@ -4,3 +4,5 @@ dist/
 tsconfig.tsbuildinfo
 # Local Claude Code settings + scheduler state (per-machine, not shared)
 .claude/
+# Transient plan-task working doc (ephemeral; not part of PRs)
+plan.md

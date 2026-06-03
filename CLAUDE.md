@@ -23,11 +23,13 @@ This repo uses **npm** (committed `package-lock.json`). It's published to npmjs.
 npm install                             # install deps (fetches @genvid/* from npm)
 npm test                                # mocha + tsx + chai, all test/**/*.test.ts
 npm test -- --grep "foo"                # run tests matching a name (npm needs `--` before forwarded args)
-npm test -- test/c3/sidUtils.test.ts    # run a single file
+npm run test:file -- test/c3/sidUtils.test.ts   # run a SINGLE file (test:file has no glob, so the path narrows)
 npm run lint                            # eslint over src/ AND test/, --max-warnings 0
 npm run typecheck                       # tsc --noEmit — checks src/ ONLY (test/ has known type errors; see commit 0b4c515)
 npm run build                           # tsc → dist/, then prepends a node shebang to dist/cli.js
 ```
+
+> **Single-file runs need `test:file`, not `npm test -- <path>`.** The `test` script hardcodes the `'test/**/*.test.ts'` spec glob, and mocha **merges** (doesn't override) a positional path with a config/inline spec — so `npm test -- test/c3/foo.test.ts` silently runs the *whole* suite (the path just dedups against the glob). `test:file` is the same command minus the glob, so the forwarded path is the only spec. `--grep` works on `npm test` because it's a name filter, not a spec.
 
 There is no dev script for the CLI. Run it in-place with `npx tsx src/cli.ts <subcommand> --project-dir <path>` — tsx compiles the `.ts` on the fly, so no build is needed. The package's `main`/`types`/`exports` point at the built `dist/` (what published consumers import); the `construct3-chef` bin also only exists after `npm run build` (it points at `dist/cli.js`).
 

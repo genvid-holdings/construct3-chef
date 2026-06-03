@@ -54,7 +54,7 @@
 		"prepack": "npm run build",
 		"build": "tsc && node -e \"const fs=require('fs');const f='dist/cli.js';const c=fs.readFileSync(f,'utf8');if(!c.startsWith('#!')){fs.writeFileSync(f,'#!/usr/bin/env node\\n'+c)}\"",
 		"test": "mocha --timeout 5000 --import=tsx --require ./test/setup.ts 'test/**/*.test.ts' --exit",
-		"lint": "eslint --ext .ts --max-warnings 0 src/ test/",
+		"lint": "eslint --ext .ts --max-warnings 0 src/ test/ && npm run format:check",
 		"typecheck": "tsc --noEmit",
 		"test:file": "mocha --timeout 5000 --import=tsx --require ./test/setup.ts --exit",
 		"format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",

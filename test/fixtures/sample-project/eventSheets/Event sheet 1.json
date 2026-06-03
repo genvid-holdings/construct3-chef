@@ -1,5 +1,33 @@
 {
 	"name": "Event sheet 1",
-	"events": [],
+	"events": [
+		{
+			"eventType": "variable",
+			"name": "score",
+			"type": "number",
+			"initialValue": "0",
+			"isStatic": false,
+			"isConstant": false,
+			"sid": 100000000000020
+		},
+		{
+			"eventType": "group",
+			"disabled": false,
+			"title": "GameLoop",
+			"isActiveOnStart": true,
+			"children": [
+				{
+					"eventType": "variable",
+					"name": "temp",
+					"type": "number",
+					"initialValue": "0",
+					"isStatic": false,
+					"isConstant": false,
+					"sid": 100000000000021
+				}
+			],
+			"sid": 100000000000022
+		}
+	],
 	"sid": 635959236260852
 }

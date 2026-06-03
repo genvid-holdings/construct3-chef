@@ -25,6 +25,7 @@ import {
   type DslIndexEntry,
   type SidMapEntry,
 } from "../../src/c3/dslFormatter.js";
+import { parseIndexText, resolveAnchor } from "../../src/c3/anchorResolver.js";
 
 describe("formatAction", () => {
   it("formats a standard action with parameters", () => {
@@ -564,7 +565,7 @@ describe("buildShallowSidMap", () => {
     const entry = result[0] as SidMapEntry;
     assert.equal(entry.jsonPath, "events[0]");
     assert.equal(entry.sid, 101);
-    assert.equal(entry.description, "var hp: number = 100");
+    assert.equal(entry.description, "global var hp: number = 100");
   });
 
   it("include event — returns entry with sid: undefined and description as 'include SheetName'", () => {
@@ -1595,7 +1596,7 @@ describe("renderSubtree", () => {
     assert.equal(index[0].jsonPath, "events[0]");
     assert.equal(index[0].eventNumber, null);
     assert.equal(index[0].sid, 1);
-    assert.equal(index[0].description, "var count: number = 0");
+    assert.equal(index[0].description, "global var count: number = 0");
 
     // group: counting (eventNumber 1)
     assert.equal(index[1].jsonPath, "events[1]");
@@ -1728,7 +1729,7 @@ describe("renderSubtree", () => {
     assert.equal(index[0].description, "include OtherSheet");
     assert.equal(index[1].description, "// A note");
     assert.equal(index[2].description, "// Line one..."); // multi-line truncated
-    assert.equal(index[3].description, "var hp: number = 100");
+    assert.equal(index[3].description, "global var hp: number = 100");
     assert.equal(index[4].description, "block");
     assert.equal(index[5].description, "block [OR]");
     assert.equal(index[6].description, 'group "Grp"');
@@ -1771,5 +1772,258 @@ describe("renderSubtree", () => {
     const { lines, index } = renderSubtree([], "Test", 1);
     assert.deepEqual(lines, []);
     assert.deepEqual(index, []);
+  });
+});
+
+describe("global vs local variable scope markers", () => {
+  // Helper: build a minimal EventSheet with the given events at root level.
+  function makeSheet(events: EventSheet["events"]): EventSheet {
+    return { name: "ScopeSheet", sid: 999, events };
+  }
+
+  // --- .dsl.txt path via renderSubtree (uses renderNodeSelf internally) ---
+
+  it("sheet-root var: DSL line has 'global var' prefix", () => {
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "score",
+      type: "number",
+      initialValue: "0",
+      isStatic: false,
+      isConstant: false,
+      sid: 1,
+    };
+    const { lines } = renderSubtree([variable], "ScopeSheet", 1);
+    assert.isTrue(
+      lines.some((l) => l.trim() === "global var score: number = 0"),
+      `Expected a line 'global var score: number = 0', got: ${JSON.stringify(lines)}`,
+    );
+  });
+
+  it("nested (local) var: DSL line has no 'global' prefix", () => {
+    const local: EventSheetVariable = {
+      eventType: "variable",
+      name: "temp",
+      type: "number",
+      initialValue: "0",
+      isStatic: false,
+      isConstant: false,
+      sid: 2,
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "GameLoop",
+      isActiveOnStart: true,
+      children: [local],
+      sid: 3,
+    };
+    const { lines } = renderSubtree([group], "ScopeSheet", 1);
+    assert.isTrue(
+      lines.some((l) => l.trim() === "var temp: number = 0"),
+      `Expected a line 'var temp: number = 0', got: ${JSON.stringify(lines)}`,
+    );
+    assert.isFalse(
+      lines.some((l) => l.includes("global var temp")),
+      `Expected no 'global var temp' in nested context, got: ${JSON.stringify(lines)}`,
+    );
+  });
+
+  it("sheet-root static: DSL line has 'global static' prefix", () => {
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "hp",
+      type: "number",
+      initialValue: "100",
+      isStatic: true,
+      isConstant: false,
+      sid: 4,
+    };
+    const { lines } = renderSubtree([variable], "ScopeSheet", 1);
+    assert.isTrue(
+      lines.some((l) => l.trim() === "global static hp: number = 100"),
+      `Expected 'global static hp: number = 100', got: ${JSON.stringify(lines)}`,
+    );
+  });
+
+  it("sheet-root const: DSL line has 'global const' prefix", () => {
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "MAX",
+      type: "number",
+      initialValue: "5",
+      isStatic: false,
+      isConstant: true,
+      sid: 5,
+    };
+    const { lines } = renderSubtree([variable], "ScopeSheet", 1);
+    assert.isTrue(
+      lines.some((l) => l.trim() === "global const MAX: number = 5"),
+      `Expected 'global const MAX: number = 5', got: ${JSON.stringify(lines)}`,
+    );
+  });
+
+  // --- buildIndexEntry path via renderSubtree (index entries) ---
+
+  it("buildIndexEntry: root variable (events[N]) description starts with 'global '", () => {
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "count",
+      type: "number",
+      initialValue: "0",
+      isStatic: false,
+      isConstant: false,
+      sid: 6,
+    };
+    const { index } = renderSubtree([variable], "ScopeSheet", 1);
+    assert.equal(index.length, 1);
+    assert.equal(index[0].jsonPath, "events[0]");
+    assert.isTrue(
+      index[0].description.startsWith("global "),
+      `Expected description to start with 'global ', got: '${index[0].description}'`,
+    );
+    assert.equal(index[0].description, "global var count: number = 0");
+  });
+
+  it("buildIndexEntry: nested variable (events[N].children[M]) description does NOT start with 'global '", () => {
+    const local: EventSheetVariable = {
+      eventType: "variable",
+      name: "temp",
+      type: "number",
+      initialValue: "0",
+      isStatic: false,
+      isConstant: false,
+      sid: 7,
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "Inner",
+      isActiveOnStart: true,
+      children: [local],
+      sid: 8,
+    };
+    const { index } = renderSubtree([group], "ScopeSheet", 1);
+    // index[0] = group, index[1] = nested variable
+    assert.equal(index.length, 2);
+    assert.equal(index[1].jsonPath, "events[0].children[0]");
+    assert.isFalse(
+      index[1].description.startsWith("global "),
+      `Expected nested variable description to NOT start with 'global ', got: '${index[1].description}'`,
+    );
+    assert.equal(index[1].description, "var temp: number = 0");
+  });
+
+  // --- buildShallowSidMap path ---
+
+  it("buildShallowSidMap: root variable description starts with 'global '", () => {
+    const variable: EventSheetVariable = {
+      eventType: "variable",
+      name: "count",
+      type: "number",
+      initialValue: "0",
+      isStatic: false,
+      isConstant: false,
+      sid: 9,
+    };
+    const result = buildShallowSidMap(makeSheet([variable]));
+    assert.equal(result.length, 1);
+    assert.equal(result[0].jsonPath, "events[0]");
+    assert.isTrue(
+      result[0].description.startsWith("global "),
+      `Expected description to start with 'global ', got: '${result[0].description}'`,
+    );
+    assert.equal(result[0].description, "global var count: number = 0");
+  });
+
+  it("buildShallowSidMap: nested variable (inside group) description does NOT start with 'global '", () => {
+    const local: EventSheetVariable = {
+      eventType: "variable",
+      name: "temp",
+      type: "number",
+      initialValue: "0",
+      isStatic: false,
+      isConstant: false,
+      sid: 10,
+    };
+    const group: GroupEvent = {
+      eventType: "group",
+      disabled: false,
+      title: "Inner",
+      isActiveOnStart: true,
+      children: [local],
+      sid: 11,
+    };
+    const result = buildShallowSidMap(makeSheet([group]));
+    // buildShallowSidMap uses visitEvents — it walks all children too.
+    // result[0] = group, result[1] = nested variable at events[0].children[0]
+    assert.equal(result.length, 2);
+    assert.equal(result[1].jsonPath, "events[0].children[0]");
+    assert.isFalse(
+      result[1].description.startsWith("global "),
+      `Expected nested variable description to NOT start with 'global ', got: '${result[1].description}'`,
+    );
+    assert.equal(result[1].description, "var temp: number = 0");
+  });
+
+  // --- parseIndexText col-5 safety: 'global var ...' must not split on spaces ---
+
+  it("parseIndexText: 'global var count: number = 0' in Description column parses as single col-5 value", () => {
+    // Construct a synthetic index row with 'global var ...' as the Description
+    const descStr = "global var count: number = 0";
+    const row = `  -     | events[0]         | §100000000000020 | 4        | ${descStr}`;
+    const indexText = [
+      "# ScopeSheet — DSL Coordinate Index",
+      "# Regenerate: npm run generate-dsl",
+      "#",
+      "# Event | JSON Path | SID | DSL Line | Description",
+      "#-------|-----------|-----|----------|-----------",
+      row,
+      "",
+    ].join("\n");
+
+    const anchors = parseIndexText(indexText);
+    assert.equal(anchors.length, 1);
+    // description must be the full 'global var count: number = 0' — not split at the space
+    assert.equal(anchors[0].description, "global var count: number = 0");
+    assert.equal(anchors[0].jsonPath, "events[0]");
+    assert.equal(anchors[0].sid, 100000000000020);
+    assert.equal(anchors[0].dslLine, 4);
+  });
+
+  it("resolveAnchor by-name: pattern 'global var' finds the entry", () => {
+    const descStr = "global var count: number = 0";
+    const row = `  -     | events[0]         | §100000000000020 | 4        | ${descStr}`;
+    const indexText = [
+      "# ScopeSheet — DSL Coordinate Index",
+      "# Regenerate: npm run generate-dsl",
+      "#",
+      "# Event | JSON Path | SID | DSL Line | Description",
+      "#-------|-----------|-----|----------|-----------",
+      row,
+      "",
+    ].join("\n");
+
+    const result = resolveAnchor(indexText, { by: "name", name: "global var" });
+    assert.isNotNull(result);
+    assert.equal(result!.anchor.description, "global var count: number = 0");
+  });
+
+  it("resolveAnchor by-name: pattern matching variable name 'count' finds the entry", () => {
+    const descStr = "global var count: number = 0";
+    const row = `  -     | events[0]         | §100000000000020 | 4        | ${descStr}`;
+    const indexText = [
+      "# ScopeSheet — DSL Coordinate Index",
+      "# Regenerate: npm run generate-dsl",
+      "#",
+      "# Event | JSON Path | SID | DSL Line | Description",
+      "#-------|-----------|-----|----------|-----------",
+      row,
+      "",
+    ].join("\n");
+
+    const result = resolveAnchor(indexText, { by: "name", name: "count" });
+    assert.isNotNull(result);
+    assert.equal(result!.anchor.description, "global var count: number = 0");
   });
 });

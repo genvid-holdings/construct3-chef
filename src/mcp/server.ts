@@ -49,6 +49,7 @@ import {
   discoverAndPlanImageCopies,
   cloneSprite,
 } from "../c3/spriteScaffold.js";
+import { loadChefConfig, type ChefConfig } from "../c3/chefConfig.js";
 
 let PROJECT_ROOT = process.cwd();
 let EXTRACTED_DIR = path.join(PROJECT_ROOT, "extracted");
@@ -1672,11 +1673,12 @@ server.registerTool(
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-export async function startServer(projectDir?: string): Promise<void> {
+export async function startServer(projectDir?: string, overrides?: Partial<ChefConfig>): Promise<void> {
   if (projectDir) {
     PROJECT_ROOT = projectDir;
-    EXTRACTED_DIR = path.join(PROJECT_ROOT, "extracted");
   }
+  const config = await loadChefConfig(PROJECT_ROOT, overrides);
+  EXTRACTED_DIR = path.join(PROJECT_ROOT, config.extractedDir);
 
   // Startup validation — warn but don't hard-fail
   const c3projPath = path.join(PROJECT_ROOT, "project.c3proj");

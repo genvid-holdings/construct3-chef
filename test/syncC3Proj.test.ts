@@ -21,7 +21,7 @@ import {
   type Change,
 } from "../src/c3/projectSync.js";
 
-const sampleProjectDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "fixtures", "sample-project");
+const sampleProjectDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "fixtures", "construct3-chef-sample");
 
 // Helper to create a temp directory
 function createTmpDir(): string {
@@ -198,7 +198,7 @@ describe("syncC3Proj", () => {
     });
   });
 
-  describe("oracle — detectManifestDrift on sample-project", () => {
+  describe("oracle — detectManifestDrift on construct3-chef-sample", () => {
     // Cross-check our sync against c3source's upstream drift detector for the
     // sections it models the same way we do (the name-folder sections). The file
     // sections (rootFileFolders.*) are deliberately excluded: c3source walks them
@@ -230,7 +230,7 @@ describe("syncC3Proj", () => {
     });
   });
 
-  describe("oracle — detectImageDrift on sample-project", () => {
+  describe("oracle — detectImageDrift on construct3-chef-sample", () => {
     it("returns the images section with no drift entries", () => {
       const drift = detectImageDrift(sampleProjectDir);
       assert.equal(drift?.section, "images");

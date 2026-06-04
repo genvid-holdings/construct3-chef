@@ -1,7 +1,7 @@
 {
 	"projectFormatVersion": 1,
 	"savedWithRelease": 48702,
-	"name": "sample-project",
+	"name": "construct3-chef-sample",
 	"runtime": "c3",
 	"useWorker": "auto",
 	"bundleAddons": false,

@@ -14,7 +14,7 @@ import {
 import type { Layout, Layer, Instance } from "@genvid/c3source";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE_LAYOUTS_DIR = path.join(__dirname, "../fixtures/sample-project/layouts");
+const FIXTURE_LAYOUTS_DIR = path.join(__dirname, "../fixtures/construct3-chef-sample/layouts");
 
 let nextUid = 1;
 
@@ -629,7 +629,7 @@ describe("layoutFormatter", () => {
   });
 
   describe("buildGlobalLayerReport", () => {
-    it("should return the correct report entry for the sample-project fixture", () => {
+    it("should return the correct report entry for the construct3-chef-sample fixture", () => {
       const mainLayoutJson = readFileSync(path.join(FIXTURE_LAYOUTS_DIR, "Main Layout.json"), "utf-8");
       const secondLayoutJson = readFileSync(path.join(FIXTURE_LAYOUTS_DIR, "Second Layout.json"), "utf-8");
       const parsedLayouts = [

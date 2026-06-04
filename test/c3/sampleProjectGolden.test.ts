@@ -14,7 +14,7 @@ import {
 
 /**
  * Golden-file integration test over a real C3 project export
- * (test/fixtures/sample-project). The committed extracted/ directory is the
+ * (test/fixtures/construct3-chef-sample). The committed extracted/ directory is the
  * baseline; this test regenerates it in a temp copy and asserts byte-identical
  * output (line endings normalized).
  *
@@ -25,10 +25,10 @@ import {
  * sublayer, a scene-graph parent/child pair, and a template across layouts.
  *
  * To intentionally update the golden after a deliberate output change:
- *   pnpm exec tsx src/cli.ts generate --project-dir test/fixtures/sample-project
+ *   pnpm exec tsx src/cli.ts generate --project-dir test/fixtures/construct3-chef-sample
  */
 
-const FIXTURE_ROOT = path.resolve("test/fixtures/sample-project");
+const FIXTURE_ROOT = path.resolve("test/fixtures/construct3-chef-sample");
 const GOLDEN_DIR = path.join(FIXTURE_ROOT, "extracted");
 // Source dirs/files the generators read (everything except the generated extracted/).
 const SOURCE_ENTRIES = ["eventSheets", "layouts", "objectTypes", "scripts", "project.c3proj"];
@@ -48,13 +48,13 @@ function listFilesRel(dir: string): string[] {
   return out.sort();
 }
 
-describe("sample-project golden extracted/ output", () => {
+describe("construct3-chef-sample golden extracted/ output", () => {
   let tmpRoot: string;
 
   before(function () {
     if (!existsSync(GOLDEN_DIR)) {
       throw new Error(
-        `Missing golden dir ${GOLDEN_DIR}. Generate it with: pnpm exec tsx src/cli.ts generate --project-dir test/fixtures/sample-project`,
+        `Missing golden dir ${GOLDEN_DIR}. Generate it with: pnpm exec tsx src/cli.ts generate --project-dir test/fixtures/construct3-chef-sample`,
       );
     }
     tmpRoot = mkdtempSync(path.join(os.tmpdir(), "c3chef-golden-"));

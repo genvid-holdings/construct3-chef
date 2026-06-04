@@ -15,7 +15,7 @@ import {
 } from "../../src/c3/generators.js";
 import { regenerateExtracted, applyParsed } from "../../src/c3/recipeApplier.js";
 
-const FIXTURE_ROOT = path.resolve("test/fixtures/sample-project");
+const FIXTURE_ROOT = path.resolve("test/fixtures/construct3-chef-sample");
 // Source dirs/files — same list the golden test uses, intentionally excludes extracted/
 const SOURCE_ENTRIES = ["eventSheets", "layouts", "objectTypes", "scripts", "project.c3proj"];
 

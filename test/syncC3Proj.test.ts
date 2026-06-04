@@ -260,18 +260,25 @@ describe("syncC3Proj", () => {
     });
   });
 
-  describe("timelines nameless subfolder", () => {
-    // The fixture's `timelines` manifest section has items ["Timeline 1"] plus one
-    // NAMELESS subfolder ({items:[], subfolders:[]}) with no disk counterpart, while
-    // disk has only `Timeline 1.json` (+ an editor-local `.uistate.json`). runSync must
-    // report ZERO changes: it must not try to remove the nameless subfolder (name ===
-    // undefined) nor mistake the editor-local file for drift. This pins the behavior
-    // the `findNamelessDiskDirs` heuristic provides today, so the upcoming swap to
-    // c3source `walkDiskNameTree` (and the later DriftEntry apply engine) must preserve it.
-    it("reports no changes syncing the fixture timelines section", () => {
+  describe("timelines transitions (nameless) subfolder", () => {
+    // #62: the fixture's `timelines` manifest section has items ["Timeline 1"] plus one
+    // NAMELESS subfolder — C3's serialization of the on-disk `timelines/transitions/`
+    // directory ("Eases" in the editor) — carrying items ["Matt's Ease"], matching the
+    // disk `transitions/Matt's Ease.json` (+ an editor-local `.uistate.json`). runSync must
+    // report ZERO changes. Before c3source 1.3.0 (#28) the manifest walk gave the nameless
+    // subfolder no path segment while disk yielded `transitions`, so sync reported a false
+    // `transitions/ (new folder)` add and "corrected" it by appending a NAMED `"transitions"`
+    // subfolder — duplicating the item. This pins the fixed round-trip: no spurious folder,
+    // no item duplication.
+    it("reports no changes syncing the populated transitions subfolder", () => {
       const result = runSync(sampleProjectDir, true, () => {}, "timelines");
       assert.deepEqual(result.changes, [], "timelines: unexpected changes");
       assert.equal(result.clean, true);
+      // Explicit anti-corruption guard: no change may re-introduce a named `transitions` folder.
+      assert.isUndefined(
+        result.changes.find((c) => /transitions/i.test(c.detail)),
+        "sync must not emit a transitions folder change",
+      );
     });
   });
 

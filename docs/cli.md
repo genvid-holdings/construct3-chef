@@ -21,12 +21,25 @@ Drop an optional `construct3-chef.config.json` at the project root (`--project-d
 | Field | Default | Description |
 | ----- | ------- | ----------- |
 | `extractedDir` | `"extracted"` | Directory (relative to the project root) for the generated read-surface files. Must resolve **inside** the project root. |
+| `navigation.targetPatterns` | the two `System.go-to-layout…` patterns | Regexes (each with **one capture group** = the target layout name) that [`navigation-graph`](#navigation-graph) scans the DSL for. Override when your project navigates through a wrapper function instead of the built-in System action. |
+| `navigation.definitionMarkers` | `[]` | Substrings that mark a line as a function *definition* (not a call) so it is skipped — e.g. `"function GoToLayout"` to keep a wrapper's own definition out of the graph. |
 
 ```json
 { "extractedDir": "c3-extracted" }
 ```
 
 With the above, every command that reads or writes the read surface — `generate`, `apply-recipe`, `scaffold-layout`, `remove-layer`, `rename-symbol`, `navigation-graph`, `search-dsl`, and the server's auto-generate/regenerate — targets `c3-extracted/` instead of `extracted/`. The C3-fixed source directories (`eventSheets/`, `layouts/`, `objectTypes/`, `families/`, `scripts/`) are not configurable.
+
+By default `navigation-graph` detects the built-in `System.go-to-layout` and `System.go-to-layout-by-name` actions, so it works on any project with no config. A project that wraps navigation in its own function points the graph at the wrapper instead — a bad regex is dropped (the rest of the config still loads):
+
+```json
+{
+  "navigation": {
+    "targetPatterns": ["GoToLayout\\(\"([^\"]+)\""],
+    "definitionMarkers": ["function GoToLayout"]
+  }
+}
+```
 
 ---
 
@@ -269,7 +282,7 @@ Watch/WatchLayout:
 
 ## navigation-graph
 
-Show all `GoToLayout` calls found in extracted DSL files, or write a PlantUML component diagram.
+Show all navigation calls found in extracted DSL files, or write a PlantUML component diagram. By default it detects the built-in `System.go-to-layout` / `System.go-to-layout-by-name` actions; configure `navigation.targetPatterns` (see [Configuration file](#configuration-file)) to scan a project-specific wrapper function instead.
 
 ```bash
 # Print to stdout

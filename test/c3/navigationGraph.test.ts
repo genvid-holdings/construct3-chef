@@ -3,12 +3,22 @@ import { assert } from "chai";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   buildLayoutEventSheetMap,
   findGoToLayoutCalls,
   generatePlantUML,
   type NavEntry,
 } from "../../src/c3/navigationGraph.js";
+import type { NavConvention } from "../../src/c3/navConvention.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** Wrapper convention that matches the old GoToLayout("...") call pattern used in existing tests. */
+const GO_TO_LAYOUT_WRAPPER: NavConvention = {
+  targetRegexes: [/GoToLayout\("([^"]+)"/],
+  isDefinitionLine: (l) => l.includes("function GoToLayout"),
+};
 
 /** Write a minimal layout JSON file into `dir` with the given name and eventSheet. */
 function writeLayout(dir: string, name: string, eventSheet: string): void {
@@ -97,7 +107,7 @@ describe("navigationGraph", () => {
         ].join("\n"),
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
 
       assert.deepEqual(entries, [
         {
@@ -123,7 +133,7 @@ describe("navigationGraph", () => {
         ].join("\n"),
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
 
       assert.deepEqual(entries, [
         {
@@ -148,7 +158,7 @@ describe("navigationGraph", () => {
         ].join("\n"),
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
 
       // Only the call on line 5 should be found, not the function definition on line 4
       assert.lengthOf(entries, 1);
@@ -169,7 +179,7 @@ describe("navigationGraph", () => {
         ].join("\n"),
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
 
       assert.deepEqual(entries, []);
     });
@@ -188,7 +198,7 @@ describe("navigationGraph", () => {
         ].join("\n"),
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
 
       // Only the quoted-string call should be included
       assert.deepEqual(entries, [
@@ -217,7 +227,7 @@ describe("navigationGraph", () => {
         ].join("\n"),
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
 
       assert.lengthOf(entries, 2);
       assert.equal(entries[0].lineNumber, 6);
@@ -251,7 +261,7 @@ describe("navigationGraph", () => {
         ].join("\n"),
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
 
       // Should find entries from both files
       const fromSheets = entries.map((e) => e.fromSheet).sort();
@@ -274,7 +284,7 @@ describe("navigationGraph", () => {
         ].join("\n"),
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
 
       assert.lengthOf(entries, 1);
       assert.equal(entries[0].fromSheet, "ActualSheetName");
@@ -297,7 +307,7 @@ describe("navigationGraph", () => {
         ].join("\n"),
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
 
       assert.deepEqual(entries, [
         { fromSheet: "MainMenuEvents", targetLayout: "ShopLayout", lineNumber: 4 },
@@ -314,8 +324,101 @@ describe("navigationGraph", () => {
         "utf-8",
       );
 
-      const entries = findGoToLayoutCalls(dir);
+      const entries = findGoToLayoutCalls(dir, GO_TO_LAYOUT_WRAPPER);
       assert.deepEqual(entries, []);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // System default convention
+  // ────────────────────────────────────────────────────────────
+
+  describe("System default convention", () => {
+    it("go-to-layout: captures bare layout name and spaced sheet header", () => {
+      const dir = makeTmpDir();
+      writeDsl(
+        dir,
+        "SomeSheet.dsl.txt",
+        [
+          "# Some Sheet",
+          "# Source: eventSheets/SomeSheet.json",
+          "",
+          "  block",
+          "    do: System.go-to-layout(layout=Second Layout)",
+        ].join("\n"),
+      );
+
+      const entries = findGoToLayoutCalls(dir);
+
+      assert.deepEqual(entries, [
+        {
+          fromSheet: "Some Sheet",
+          targetLayout: "Second Layout",
+          lineNumber: 5,
+        },
+      ] satisfies NavEntry[]);
+    });
+
+    it("go-to-layout-by-name: captures quoted layout name", () => {
+      const dir = makeTmpDir();
+      writeDsl(
+        dir,
+        "Sheet2.dsl.txt",
+        [
+          "# Sheet Two",
+          "# Source: eventSheets/Sheet2.json",
+          "",
+          '    do: System.go-to-layout-by-name(layout="Main Layout")',
+        ].join("\n"),
+      );
+
+      const entries = findGoToLayoutCalls(dir);
+
+      assert.deepEqual(entries, [
+        {
+          fromSheet: "Sheet Two",
+          targetLayout: "Main Layout",
+          lineNumber: 4,
+        },
+      ] satisfies NavEntry[]);
+    });
+
+    it("go-to-layout-by-name with variable target is NOT captured", () => {
+      const dir = makeTmpDir();
+      writeDsl(
+        dir,
+        "DynSheet.dsl.txt",
+        [
+          "# Dyn Sheet",
+          "# Source: eventSheets/DynSheet.json",
+          "",
+          "    do: System.go-to-layout-by-name(layout=someVar)",
+        ].join("\n"),
+      );
+
+      const entries = findGoToLayoutCalls(dir);
+
+      assert.deepEqual(entries, []);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // Fixture-based detection (default convention)
+  // ────────────────────────────────────────────────────────────
+
+  describe("fixture detection (default convention)", () => {
+    const FIXTURE_EXTRACTED = path.resolve(__dirname, "../fixtures/construct3-chef-sample/extracted/eventSheets");
+
+    it("finds exactly the two System go-to-layout calls in the committed fixture", () => {
+      const entries = findGoToLayoutCalls(FIXTURE_EXTRACTED);
+
+      // Sort for deterministic comparison (order may vary by file-walk order)
+      const sorted = [...entries].sort((a, b) => a.fromSheet.localeCompare(b.fromSheet));
+
+      assert.deepEqual(sorted, [
+        { fromSheet: "Event sheet 1", targetLayout: "Second Layout", lineNumber: 11 },
+        { fromSheet: "Event sheet 2", targetLayout: "Main Layout", lineNumber: 7 },
+      ] satisfies NavEntry[]);
     });
   });
 

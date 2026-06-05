@@ -3,6 +3,12 @@ import { loadProjectConfig, isMcpError } from "@genvid/mcp-utils";
 
 export const ChefConfigSchema = z.object({
   extractedDir: z.string().default("extracted"),
+  navigation: z
+    .object({
+      targetPatterns: z.string().array().optional(),
+      definitionMarkers: z.string().array().optional(),
+    })
+    .optional(),
 });
 export type ChefConfig = z.infer<typeof ChefConfigSchema>;
 
@@ -26,7 +32,11 @@ export async function loadChefConfig(projectRoot: string, overrides?: Partial<Ch
     // escape) -> safe default. Honor a string override, else fall back to
     // the schema default. Kept branch-local so this never throws.
     const override = overrides?.extractedDir;
-    return { extractedDir: typeof override === "string" ? override : "extracted" };
+    const navOverride = overrides?.navigation;
+    return {
+      extractedDir: typeof override === "string" ? override : "extracted",
+      ...(navOverride !== undefined ? { navigation: navOverride } : {}),
+    };
   }
   return result;
 }

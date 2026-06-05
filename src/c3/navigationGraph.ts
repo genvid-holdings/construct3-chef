@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { find_all_files_path, find_all_layouts_path, type Layout } from "@genvid/c3source";
+import { type NavConvention, defaultNavConvention } from "./navConvention.js";
 
 /** Map from layoutName -> primary eventSheet name (from layout JSON) */
 export function buildLayoutEventSheetMap(layoutsDir: string): Record<string, string> {
@@ -24,12 +25,22 @@ export interface NavEntry {
   lineNumber: number; // 1-indexed line number in DSL file
 }
 
-// Matches a double-quoted layout name in a GoToLayout call:
-// e.g., GoToLayout("SomeLayout" or GoToLayout("SomeLayout", ...)
-const GOTO_LAYOUT_QUOTED_RE = /GoToLayout\("([^"]+)"/;
-
-/** Scan all .dsl.txt files under extractedDir for GoToLayout calls */
-export function findGoToLayoutCalls(extractedDir: string): NavEntry[] {
+/**
+ * Scan all .dsl.txt files under extractedDir for navigation calls.
+ *
+ * Each line is tested against the regexes in `convention.targetRegexes`; the
+ * first regex that matches with a non-empty capture group 1 produces one
+ * NavEntry for that line. Lines for which `convention.isDefinitionLine` returns
+ * true are skipped entirely. Sheet names are parsed from the `# <name>` header
+ * on line 1 and may contain spaces.
+ *
+ * Defaults to the built-in System go-to-layout / go-to-layout-by-name convention
+ * when no second argument is supplied.
+ */
+export function findGoToLayoutCalls(
+  extractedDir: string,
+  convention: NavConvention = defaultNavConvention(),
+): NavEntry[] {
   const dslFiles = find_all_files_path(extractedDir, (filename) => filename.endsWith(".dsl.txt"));
   const entries: NavEntry[] = [];
 
@@ -37,10 +48,10 @@ export function findGoToLayoutCalls(extractedDir: string): NavEntry[] {
     const content = readFileSync(dslFile, "utf-8");
     const lines = content.split("\n");
 
-    // Parse the sheet name from the first line: "# SheetName"
+    // Parse the sheet name from the first line: "# Sheet Name (may contain spaces)"
     let fromSheet = "";
     if (lines.length > 0) {
-      const headerMatch = /^#\s+(\S+)/.exec(lines[0]);
+      const headerMatch = /^#\s+(.+?)\s*$/.exec(lines[0]);
       if (headerMatch) {
         fromSheet = headerMatch[1];
       }
@@ -50,22 +61,21 @@ export function findGoToLayoutCalls(extractedDir: string): NavEntry[] {
       const line = lines[i];
       const lineNumber = i + 1; // 1-indexed
 
-      if (!line.includes('GoToLayout("')) {
+      if (convention.isDefinitionLine(line)) {
         continue;
       }
 
-      // Skip function definitions
-      if (line.includes("function GoToLayout") || line.includes("async function GoToLayout")) {
-        continue;
-      }
-
-      const match = GOTO_LAYOUT_QUOTED_RE.exec(line);
-      if (match && match[1].length > 0) {
-        entries.push({
-          fromSheet,
-          targetLayout: match[1],
-          lineNumber,
-        });
+      // Try each regex; first match with a non-empty capture group 1 wins
+      for (const re of convention.targetRegexes) {
+        const match = re.exec(line);
+        if (match && match[1] && match[1].length > 0) {
+          entries.push({
+            fromSheet,
+            targetLayout: match[1],
+            lineNumber,
+          });
+          break;
+        }
       }
     }
   }

@@ -27,6 +27,7 @@ import {
 } from "./c3/spriteScaffold.js";
 import { findTemplates } from "./c3/templateLister.js";
 import { buildLayoutEventSheetMap, findGoToLayoutCalls, generatePlantUML } from "./c3/navigationGraph.js";
+import { resolveNavConvention } from "./c3/navConvention.js";
 
 const GENERATOR_NAMES = ["scripts", "dsl", "layouts", "templates", "sid-registry", "global-layers"] as const;
 type GeneratorName = (typeof GENERATOR_NAMES)[number];
@@ -326,7 +327,7 @@ yargs(hideBin(process.argv))
   )
   .command(
     "navigation-graph",
-    "Show layout navigation graph (GoToLayout calls)",
+    "Show layout navigation graph (System go-to-layout / configured nav calls)",
     (y) =>
       y.option("plantuml", {
         type: "string",
@@ -335,13 +336,14 @@ yargs(hideBin(process.argv))
     async (argv) => {
       const rootDir = resolveProjectDir(argv);
       const layoutsDir = path.join(rootDir, "layouts");
-      const extractedDir = path.join(rootDir, await resolveExtractedDir(rootDir));
+      const config = await loadChefConfig(rootDir);
+      const extractedDir = path.join(rootDir, config.extractedDir);
       const layoutEventSheetMap = buildLayoutEventSheetMap(layoutsDir);
       const sheetToLayout: Record<string, string> = {};
       for (const [layoutName, sheetName] of Object.entries(layoutEventSheetMap)) {
         sheetToLayout[sheetName] = layoutName;
       }
-      const navEntries = findGoToLayoutCalls(extractedDir);
+      const navEntries = findGoToLayoutCalls(extractedDir, resolveNavConvention(config));
       if (argv.plantuml) {
         const outFile = argv.plantuml;
         const name = path.basename(outFile, path.extname(outFile));
@@ -355,7 +357,7 @@ yargs(hideBin(process.argv))
         return a.lineNumber - b.lineNumber;
       });
       if (navEntries.length === 0) {
-        console.log("(no GoToLayout calls found)");
+        console.log("(no navigation calls found)");
         return;
       }
       const COL_FROM = 25;

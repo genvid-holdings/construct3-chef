@@ -12,6 +12,10 @@ map (§ "Where to read more").
 - `generators.md` — the 6 generators, `extracted/` output format, cross-referencing, localVars matching
 - `cli.md` — full CLI flag documentation for every subcommand
 
+## Process & contracts
+
+- `bug-triage.md` — backlog-grooming conventions consumed by `/genvid-dev:triage-bugs` (types, `priority/*` + `area:*` labels, required fields, split/duplicate/dependency policy, `gh` mutation recipes); pairs with the `bugTracker` block in `.genvid-agent.json`
+
 ## Architecture & design rationale
 
 - `mcp-architecture.md` — MCP server design (stdio transport, file-based model, txId/extractedDirty/watcher concurrency, Logger/ReadWriteLock decisions, security posture, SDK research, prior-art comparison)

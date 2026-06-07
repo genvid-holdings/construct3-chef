@@ -178,6 +178,12 @@ Each generator has a `generate` subcommand (writes files) and a `summary` subcom
 
 New generators should follow this formatter/CLI separation pattern to keep formatting logic testable without filesystem mocking.
 
+### Generator signatures: the `generateSidRegistry` dir asymmetry (gotcha)
+
+The six generators do **not** share one calling convention. Five — `extractScripts`, `generateDSL`, `generateLayoutSummaries`, `generateTemplateScope`, `generateGlobalLayers` — take an **absolute** `outDir` and use it directly. `generateSidRegistry(projectRoot, extractedDir = "extracted", log)` is the odd one out: it takes a **relative** dir and re-joins `projectRoot` internally (`path.join(projectRoot, extractedDir)`).
+
+So a caller that iterates the six uniformly with the absolute `EXTRACTED_DIR` produces a *doubled* path for `generateSidRegistry` (`path.join(root, /root/extracted)`) — silently wrong on POSIX (registry written to a junk location, the real `sid-registry.txt` never refreshed), an **ENOENT crash on Windows** (the drive-letter path is invalid). `cli.ts`'s `runGenerators` special-cases it (passes the relative dir); `server.ts`'s `GENERATOR_STEPS` did **not**, which shipped a real bug in the untested MCP regenerate path (fixed in #73 by passing `path.relative(PROJECT_ROOT, EXTRACTED_DIR)`). **When wiring a new generator-runner, pass `generateSidRegistry` the relative dir.** Normalizing the signature to drop the asymmetry is tracked in [#74](https://github.com/genvid-holdings/construct3-chef/issues/74).
+
 ---
 
 ## Selective Cleanup

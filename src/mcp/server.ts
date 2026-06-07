@@ -79,6 +79,16 @@ const expectedChanges = new ExpectedChanges();
 
 type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
+// ── Handler registry (also enables direct handler invocation in tests) ─────────
+const handlers = new Map<string, (args: any, extra: Extra) => Promise<unknown>>();
+function reg<
+  OutputArgs extends Record<string, import("zod").ZodTypeAny>,
+  InputArgs extends undefined | Record<string, import("zod").ZodTypeAny> = undefined,
+>(...args: Parameters<typeof server.registerTool<OutputArgs, InputArgs>>): void {
+  handlers.set(args[0] as string, args[2] as (a: any, e: Extra) => Promise<unknown>);
+  server.registerTool(...args);
+}
+
 // Shared Zod schemas mirroring layoutMutator's InstanceOverrides contract.
 // Used by workflow MCP tools whose inputs carry per-instance world overrides.
 // Without typed schemas, z.record(z.unknown()) would let a string land in a
@@ -315,7 +325,7 @@ function setupWatchers(): void {
 
 // ── Listing Tools ─────────────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "list-event-sheets",
   {
     title: "List Event Sheets",
@@ -331,7 +341,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "list-layouts",
   {
     title: "List Layouts",
@@ -346,7 +356,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "list-global-layers",
   {
     title: "List Global Layers",
@@ -367,7 +377,7 @@ server.registerTool(
 
 // ── Read Tools ────────────────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "read-dsl",
   {
     title: "Read Event Sheet DSL",
@@ -393,7 +403,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "read-dsl-index",
   {
     title: "Read Event Sheet DSL Index",
@@ -429,7 +439,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "read-event-sids",
   {
     title: "Read Event SIDs from Source",
@@ -475,7 +485,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "read-scripts",
   {
     title: "Read Extracted TypeScript",
@@ -504,7 +514,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "read-layout",
   {
     title: "Read Layout Summary",
@@ -535,7 +545,7 @@ server.registerTool(
 
 // ── Reference Tools ───────────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "read-template-scope",
   {
     title: "Read Template Scope",
@@ -557,7 +567,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "read-sid-registry",
   {
     title: "Read SID Registry",
@@ -576,7 +586,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "generate-sids",
   {
     title: "Generate Unique SIDs",
@@ -626,7 +636,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "list-include-tree",
   {
     title: "List Include Tree",
@@ -660,7 +670,7 @@ server.registerTool(
 
 // ── Search Tool ───────────────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "search",
   {
     title: "Search Files",
@@ -718,7 +728,7 @@ server.registerTool(
 
 // ── Anchor Resolution Tool ────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "resolve-anchor",
   {
     title: "Resolve DSL Anchor",
@@ -788,7 +798,7 @@ server.registerTool(
 
 // ── Recipe Tools ─────────────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "validate-recipe",
   {
     title: "Validate Recipe (Dry Run)",
@@ -825,7 +835,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "apply-recipe",
   {
     title: "Apply Recipe",
@@ -885,7 +895,7 @@ server.registerTool(
 
 // ── Regenerate Tool ─────────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "regenerate",
   {
     title: "Regenerate Extracted Files",
@@ -921,7 +931,7 @@ server.registerTool(
 
 // ── Project Tools ────────────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "validate-project",
   {
     title: "Validate project.c3proj",
@@ -948,7 +958,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "sync-project",
   {
     title: "Sync project.c3proj",
@@ -989,7 +999,7 @@ server.registerTool(
 
 const ADDON_DIRS = ["addons/plugin", "addons/effect"] as const;
 
-server.registerTool(
+reg(
   "read-addon",
   {
     title: "Read Addon",
@@ -1061,7 +1071,7 @@ server.registerTool(
 
 // ── Scaffold Tools ──────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "scaffold-layout",
   {
     title: "Scaffold Layout",
@@ -1162,7 +1172,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "scaffold-sprite",
   {
     title: "Scaffold Sprite",
@@ -1311,7 +1321,7 @@ async function runWorkflowRecipe(
   }
 }
 
-server.registerTool(
+reg(
   "extract-template",
   {
     title: "Extract Template",
@@ -1375,7 +1385,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "templatize-in-place",
   {
     title: "Templatize In Place",
@@ -1402,7 +1412,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "clone-replica-to-layouts",
   {
     title: "Clone Replica To Layouts",
@@ -1452,7 +1462,7 @@ server.registerTool(
     }),
 );
 
-server.registerTool(
+reg(
   "replace-instance-with-replica",
   {
     title: "Replace Instance With Replica",
@@ -1500,7 +1510,7 @@ server.registerTool(
 
 // ── Layer Mutation Tools ─────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "remove-layer",
   {
     title: "Remove Layer",
@@ -1546,7 +1556,7 @@ server.registerTool(
 
 // ── State Tool ───────────────────────────────────────────────────────────────
 
-server.registerTool(
+reg(
   "get-state",
   {
     title: "Get Server State",
@@ -1562,6 +1572,31 @@ server.registerTool(
       };
     }),
 );
+
+// ── Test-only seam ─────────────────────────────────────────────────────────────
+// Exposed for handler-level tests (test/mcp/serverHandlers.test.ts). server.ts is
+// not on the src/index.ts barrel, so these stay internal. Do NOT import from production code.
+export function __getHandler(name: string): ((args: any, extra: Extra) => Promise<unknown>) | undefined {
+  return handlers.get(name);
+}
+export function __setTestWatcher(w: OptimisticWatcher): void {
+  watcher = w;
+}
+export function __setExtractedDirty(value: boolean): void {
+  extractedDirty = value;
+}
+export function __getExtractedDirty(): boolean {
+  return extractedDirty;
+}
+export function __setProjectRoot(dir: string): void {
+  PROJECT_ROOT = dir;
+  EXTRACTED_DIR = path.join(dir, "extracted");
+}
+export function __resetTestState(): void {
+  extractedDirty = false;
+  PROJECT_ROOT = process.cwd();
+  EXTRACTED_DIR = path.join(PROJECT_ROOT, "extracted");
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 

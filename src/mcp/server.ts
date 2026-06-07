@@ -157,6 +157,20 @@ function notFound(tool: string, hint: string): { content: { type: "text"; text: 
   };
 }
 
+function errorWithTxId(message: string): { content: { type: "text"; text: string }[]; isError: true } {
+  return {
+    content: [
+      { type: "text", text: message },
+      { type: "text", text: `txId: ${watcher.txId}` },
+    ],
+    isError: true,
+  };
+}
+
+function caughtError(e: unknown): { content: { type: "text"; text: string }[]; isError: true } {
+  return errorWithTxId(`Error: ${e instanceof Error ? e.message : String(e)}`);
+}
+
 const STALE_WARNING = "\n\n[Warning: extracted files may be stale — run regenerate to refresh]";
 
 function appendStaleWarning(text: string): string {
@@ -796,13 +810,7 @@ server.registerTool(
         const recipe: Recipe = JSON.parse(recipeJson);
         const errors = validateRecipe(recipe);
         if (errors.length > 0) {
-          return {
-            content: [
-              { type: "text", text: `Validation errors:\n${errors.join("\n")}` },
-              { type: "text", text: `txId: ${watcher.txId}` },
-            ],
-            isError: true,
-          };
+          return errorWithTxId(`Validation errors:\n${errors.join("\n")}`);
         }
         applyParsed(PROJECT_ROOT, recipe, { dryRun: true, log });
         return {
@@ -812,13 +820,7 @@ server.registerTool(
           ],
         };
       } catch (e) {
-        return {
-          content: [
-            { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-          isError: true,
-        };
+        return caughtError(e);
       }
     }),
 );
@@ -847,16 +849,9 @@ server.registerTool(
       const { log, text } = bufferingLogger();
       try {
         if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying`,
-              },
-              { type: "text", text: `txId: ${watcher.txId}` },
-            ],
-            isError: true,
-          };
+          return errorWithTxId(
+            `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying`,
+          );
         }
         const recipe: Recipe = JSON.parse(recipeJson);
         // Suppress watcher during writes — we manage txId/extractedDirty ourselves
@@ -883,13 +878,7 @@ server.registerTool(
           watcher.bump();
           extractedDirty = true;
         }
-        return {
-          content: [
-            { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-          isError: true,
-        };
+        return caughtError(e);
       }
     }),
 );
@@ -954,13 +943,7 @@ server.registerTool(
           ],
         };
       } catch (e) {
-        return {
-          content: [
-            { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-          isError: true,
-        };
+        return caughtError(e);
       }
     }),
 );
@@ -981,16 +964,9 @@ server.registerTool(
       const { log, text } = bufferingLogger();
       try {
         if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before syncing`,
-              },
-              { type: "text", text: `txId: ${watcher.txId}` },
-            ],
-            isError: true,
-          };
+          return errorWithTxId(
+            `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before syncing`,
+          );
         }
         // Suppress watcher — we manage txId ourselves
         await watcher.suppress(async () => {
@@ -1004,13 +980,7 @@ server.registerTool(
           ],
         };
       } catch (e) {
-        return {
-          content: [
-            { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-          isError: true,
-        };
+        return caughtError(e);
       }
     }),
 );
@@ -1118,16 +1088,9 @@ server.registerTool(
       const { log, text } = bufferingLogger();
       try {
         if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding`,
-              },
-              { type: "text", text: `txId: ${watcher.txId}` },
-            ],
-            isError: true,
-          };
+          return errorWithTxId(
+            `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding`,
+          );
         }
 
         const layoutsDir = path.join(PROJECT_ROOT, "layouts");
@@ -1135,34 +1098,16 @@ server.registerTool(
         // Path traversal check — output must stay within layouts/
         const outFullPath = resolveWithin(layoutsDir, outRelPath);
         if (outFullPath === null) {
-          return {
-            content: [
-              { type: "text", text: `Invalid output path '${outRelPath}' — must stay within layouts/` },
-              { type: "text", text: `txId: ${watcher.txId}` },
-            ],
-            isError: true,
-          };
+          return errorWithTxId(`Invalid output path '${outRelPath}' — must stay within layouts/`);
         }
 
         // Path traversal check — source must stay within layouts/
         const sourceFullPath = resolveWithin(layoutsDir, source);
         if (sourceFullPath === null) {
-          return {
-            content: [
-              { type: "text", text: `Invalid source path '${source}' — must stay within layouts/` },
-              { type: "text", text: `txId: ${watcher.txId}` },
-            ],
-            isError: true,
-          };
+          return errorWithTxId(`Invalid source path '${source}' — must stay within layouts/`);
         }
         if (!fs.existsSync(sourceFullPath)) {
-          return {
-            content: [
-              { type: "text", text: `Source layout not found: layouts/${source}` },
-              { type: "text", text: `txId: ${watcher.txId}` },
-            ],
-            isError: true,
-          };
+          return errorWithTxId(`Source layout not found: layouts/${source}`);
         }
 
         const sourceContent = fs.readFileSync(sourceFullPath, "utf-8");
@@ -1212,13 +1157,7 @@ server.registerTool(
           watcher.bump();
           extractedDirty = true;
         }
-        return {
-          content: [
-            { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-          isError: true,
-        };
+        return caughtError(e);
       }
     }),
 );
@@ -1241,16 +1180,9 @@ server.registerTool(
       const { log, text } = bufferingLogger();
       try {
         if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding`,
-              },
-              { type: "text", text: `txId: ${watcher.txId}` },
-            ],
-            isError: true,
-          };
+          return errorWithTxId(
+            `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding`,
+          );
         }
 
         const objectTypesDir = path.join(PROJECT_ROOT, "objectTypes");
@@ -1262,29 +1194,14 @@ server.registerTool(
           ["name", targetName],
         ] as const) {
           if (val.includes("/") || val.includes("\\") || val.includes("..")) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Invalid ${label} '${val}' — must be a plain objectType name without path separators`,
-                },
-                { type: "text", text: `txId: ${watcher.txId}` },
-              ],
-              isError: true,
-            };
+            return errorWithTxId(`Invalid ${label} '${val}' — must be a plain objectType name without path separators`);
           }
         }
 
         // Read source objectType
         const sourceFile = path.join(objectTypesDir, `${source}.json`);
         if (!fs.existsSync(sourceFile)) {
-          return {
-            content: [
-              { type: "text", text: `Source objectType not found: objectTypes/${source}.json` },
-              { type: "text", text: `txId: ${watcher.txId}` },
-            ],
-            isError: true,
-          };
+          return errorWithTxId(`Source objectType not found: objectTypes/${source}.json`);
         }
 
         const sourceContent = fs.readFileSync(sourceFile, "utf-8");
@@ -1335,13 +1252,7 @@ server.registerTool(
           watcher.bump();
           extractedDirty = true;
         }
-        return {
-          content: [
-            { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-          isError: true,
-        };
+        return caughtError(e);
       }
     }),
 );
@@ -1370,16 +1281,9 @@ async function runWorkflowRecipe(
   const { log, text } = bufferingLogger();
   try {
     if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying`,
-          },
-          { type: "text", text: `txId: ${watcher.txId}` },
-        ],
-        isError: true,
-      };
+      return errorWithTxId(
+        `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying`,
+      );
     }
     await watcher.suppress(async () => {
       await sendProgress(extra, 0, totalSteps, "Applying workflow");
@@ -1403,13 +1307,7 @@ async function runWorkflowRecipe(
       watcher.bump();
       extractedDirty = true;
     }
-    return {
-      content: [
-        { type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` },
-        { type: "text", text: `txId: ${watcher.txId}` },
-      ],
-      isError: true,
-    };
+    return caughtError(e);
   }
 }
 
@@ -1627,13 +1525,7 @@ server.registerTool(
       const layoutsDir = path.join(PROJECT_ROOT, "layouts");
       const layoutFullPath = resolveWithin(layoutsDir, layout);
       if (layoutFullPath === null) {
-        return {
-          content: [
-            { type: "text", text: `Invalid layout path '${layout}' — must stay within layouts/` },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-          isError: true,
-        };
+        return errorWithTxId(`Invalid layout path '${layout}' — must stay within layouts/`);
       }
 
       const recipe: Recipe = {

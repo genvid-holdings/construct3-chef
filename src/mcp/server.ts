@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import type { ServerRequest, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ServerRequest, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -10,7 +10,7 @@ import {
   ReadWriteLock,
   ExpectedChanges,
   OptimisticWatcher,
-  paginateText,
+  paginatedContent,
   exposeDocs,
   bufferingLogger,
   resolveWithin,
@@ -254,19 +254,10 @@ const PAGINATION_PARAMS = {
   limit: z.number().int().min(1).optional().describe("Max lines to return. Omit to return all."),
 };
 
-function paginatedResponse(
-  text: string,
-  offset: number | undefined,
-  limit: number | undefined,
-): { content: { type: "text"; text: string }[] } {
-  const paginated = paginateText(text, { offset, limit });
-  const content: { type: "text"; text: string }[] = [{ type: "text", text: appendStaleWarning(paginated.text) }];
-  if (offset !== undefined || limit !== undefined) {
-    const returnedLines = paginated.text === "" ? 0 : paginated.text.split("\n").length;
-    const endLine = paginated.offset + Math.max(0, returnedLines - 1);
-    content.push({ type: "text", text: `lines: ${paginated.offset}-${endLine} / ${paginated.totalLines}` });
-  }
-  return { content };
+function paginatedResponse(text: string, offset: number | undefined, limit: number | undefined): CallToolResult {
+  const result = paginatedContent(text, { offset, limit });
+  const pageText = (result.content[0] as { text: string }).text;
+  return { content: [{ type: "text" as const, text: appendStaleWarning(pageText) }] };
 }
 
 function globRelative(dir: string, ext: string): string[] {

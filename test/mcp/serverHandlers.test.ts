@@ -140,7 +140,36 @@ describe("MCP server handler response shaping", () => {
     expect(cleanResult.content[0].text).to.not.include(STALE_WARNING);
   });
 
-  // ── 3. apply-recipe txId-rejection ───────────────────────────────────────
+  // ── 3. read-dsl single-block pagination contract ─────────────────────────
+  // paginatedResponse now delegates to paginatedContent (upstream helper) which
+  // collapses the page text and the range footer into ONE content block, joined
+  // with "\n\n". The old two-block shape is gone.
+  //
+  // Fixture: extracted/eventSheets/Event sheet 1.dsl.txt — 12 lines.
+
+  it("read-dsl with offset+limit returns single content block with in-block range footer", async () => {
+    const handler = __getHandler("read-dsl")!;
+    expect(handler).to.exist;
+
+    __setExtractedDirty(false);
+    // offset=2, limit=1 → returns line 2 of the DSL file; footer appended in-block.
+    const result = (await handler({ sheet: "Event sheet 1", offset: 2, limit: 1 }, makeExtra())) as any;
+
+    // Single block — core contract of #26
+    expect(result.content).to.have.length(1);
+    expect(result.content[0].type).to.equal("text");
+    // Range footer is in the same block, after "\n\n"
+    expect(result.content[0].text).to.match(/\nlines: \d+-\d+ \/ \d+$/);
+
+    // Out-of-range page: offset far beyond total lines → footer shows "lines: 0 / <total>"
+    // (documents the latent-bug fix: the old two-block code computed a misleading
+    //  endLine when returnedLines was 0 — the new upstream helper emits "lines: 0 / N")
+    const outOfRange = (await handler({ sheet: "Event sheet 1", offset: 9999, limit: 1 }, makeExtra())) as any;
+    expect(outOfRange.content).to.have.length(1);
+    expect(outOfRange.content[0].text).to.match(/lines: 0 \/ \d+/);
+  });
+
+  // ── 4. apply-recipe txId-rejection ───────────────────────────────────────
 
   it("apply-recipe rejects mismatched txId before parsing recipe, no watcher bump", async () => {
     const handler = __getHandler("apply-recipe")!;
@@ -156,7 +185,7 @@ describe("MCP server handler response shaping", () => {
     expect(watcher.bumped).to.equal(0);
   });
 
-  // ── 4. apply-recipe caughtError on invalid JSON ───────────────────────────
+  // ── 5. apply-recipe caughtError on invalid JSON ───────────────────────────
 
   it("apply-recipe returns caughtError for invalid JSON, no watcher bump, dirty unchanged", async () => {
     const handler = __getHandler("apply-recipe")!;
@@ -173,7 +202,7 @@ describe("MCP server handler response shaping", () => {
     expect(__getExtractedDirty()).to.be.true;
   });
 
-  // ── 5. apply-recipe success with regenerate:false ─────────────────────────
+  // ── 6. apply-recipe success with regenerate:false ─────────────────────────
 
   it("apply-recipe succeeds (regenerate:false): two blocks, txId bumped once, no isError", async () => {
     const handler = __getHandler("apply-recipe")!;
@@ -190,7 +219,7 @@ describe("MCP server handler response shaping", () => {
     // (dirty was true; test verifies it stays unchanged from this handler's perspective)
   });
 
-  // ── 6. apply-recipe success (regenerate:true) clears extractedDirty ───────
+  // ── 7. apply-recipe success (regenerate:true) clears extractedDirty ───────
   // Runs all 6 generators against the tmp fixture copy. Regression guard for the
   // generateSidRegistry dir fix in this commit: before it, this crashed on
   // Windows (ENOENT, doubled path) and silently mis-wrote the registry on POSIX.
@@ -210,7 +239,7 @@ describe("MCP server handler response shaping", () => {
     expect(__getExtractedDirty()).to.be.false;
   });
 
-  // ── 7. apply-recipe CancelledError after source write ─────────────────────
+  // ── 8. apply-recipe CancelledError after source write ─────────────────────
   // Aborted signal causes checkCancelled() to throw inside runGenerators AFTER
   // applyParsed has already written source files.
 

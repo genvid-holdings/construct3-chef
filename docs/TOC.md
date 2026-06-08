@@ -14,7 +14,7 @@ map (§ "Where to read more").
 
 ## Process & contracts
 
-- `bug-triage.md` — backlog-grooming conventions consumed by `/genvid-dev:triage-bugs` (types, `priority/*` + `area:*` labels, required fields, split/duplicate/dependency policy, `gh` mutation recipes); pairs with the `bugTracker` block in `.genvid-agent.json`
+- `issue-triage.md` — backlog-grooming conventions consumed by `/genvid-dev:triage-issues` (types, `priority/*` + `area:*` labels, required fields, split/duplicate/dependency policy, `gh` mutation recipes); pairs with the `bugTracker` block in `.genvid-agent.json`
 
 ## Architecture & design rationale
 

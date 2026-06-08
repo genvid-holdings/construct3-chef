@@ -1,6 +1,6 @@
 # Backlog Triage Conventions
 
-> Project conventions consumed by `/genvid-dev:triage-bugs`. construct3-chef has
+> Project conventions consumed by `/genvid-dev:triage-issues`. construct3-chef has
 > no separate bug tracker — its backlog is **GitHub issues**, predominantly
 > `enhancement`s (features, refactors, upstream adoptions). This file therefore
 > grooms the *enhancement backlog*: dedup, link dependencies, enrich, split

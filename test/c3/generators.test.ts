@@ -62,7 +62,7 @@ describe("generateSidRegistry", () => {
       "utf-8",
     );
 
-    generateSidRegistry(dir);
+    generateSidRegistry(dir, path.join(dir, "extracted"));
     const lines = readRegistry(dir);
 
     // Header lines
@@ -94,7 +94,7 @@ describe("generateSidRegistry", () => {
       "utf-8",
     );
 
-    generateSidRegistry(dir);
+    generateSidRegistry(dir, path.join(dir, "extracted"));
     const entries = parseDataLines(readRegistry(dir));
     for (let i = 1; i < entries.length; i++) {
       assert.isAtMost(entries[i - 1].sid, entries[i].sid, "entries should be in ascending SID order");
@@ -111,7 +111,7 @@ describe("generateSidRegistry", () => {
       "utf-8",
     );
 
-    generateSidRegistry(dir);
+    generateSidRegistry(dir, path.join(dir, "extracted"));
     const entries = parseDataLines(readRegistry(dir));
     const rootEntry = entries.find((e) => e.sid === rootSid);
     assert.isOk(rootEntry, "root SID should appear");
@@ -128,7 +128,7 @@ describe("generateSidRegistry", () => {
       "utf-8",
     );
 
-    generateSidRegistry(dir);
+    generateSidRegistry(dir, path.join(dir, "extracted"));
     const entries = parseDataLines(readRegistry(dir));
     const rootEntry = entries.find((e) => e.sid === rootSid);
     assert.isOk(rootEntry, "objectType root SID should appear");
@@ -150,7 +150,7 @@ describe("generateSidRegistry", () => {
       "utf-8",
     );
 
-    generateSidRegistry(dir);
+    generateSidRegistry(dir, path.join(dir, "extracted"));
     const entries = parseDataLines(readRegistry(dir));
     const instVarEntry = entries.find((e) => e.sid === instVarSid);
     assert.isOk(instVarEntry, "instVar SID should appear");
@@ -178,7 +178,7 @@ describe("generateSidRegistry", () => {
       "utf-8",
     );
 
-    generateSidRegistry(dir);
+    generateSidRegistry(dir, path.join(dir, "extracted"));
     const entries = parseDataLines(readRegistry(dir));
     const condEntry = entries.find((e) => e.sid === condSid);
     assert.isOk(condEntry, "condition SID should appear in registry");
@@ -202,7 +202,7 @@ describe("generateSidRegistry", () => {
       "utf-8",
     );
 
-    generateSidRegistry(dir);
+    generateSidRegistry(dir, path.join(dir, "extracted"));
     const entries = parseDataLines(readRegistry(dir));
     const sidValues = entries.map((e) => e.sid);
     assert.include(sidValues, sheetSid, "sheet SID from subdirectory should appear");
@@ -221,7 +221,7 @@ describe("generateSidRegistry", () => {
       "utf-8",
     );
 
-    generateSidRegistry(dir);
+    generateSidRegistry(dir, path.join(dir, "extracted"));
     const entries = parseDataLines(readRegistry(dir));
     const matching = entries.filter((e) => e.sid === sid);
     assert.equal(matching.length, 1, "each SID should appear exactly once per occurrence");
@@ -235,7 +235,7 @@ describe("generateSidRegistry", () => {
     // This test uses the actual project root — may be slow on large projects
     this.timeout(30000);
 
-    generateSidRegistry(projectRoot);
+    generateSidRegistry(projectRoot, path.join(projectRoot, "extracted"));
 
     const outPath = path.join(projectRoot, "extracted", "sid-registry.txt");
     assert.isTrue(existsSync(outPath), "extracted/sid-registry.txt should exist");
@@ -273,7 +273,7 @@ describe("generateSidRegistry", () => {
     this.timeout(10000);
 
     // AJAX.json has sid 524908132553448 at the root
-    generateSidRegistry(projectRoot);
+    generateSidRegistry(projectRoot, path.join(projectRoot, "extracted"));
     const outPath = path.join(projectRoot, "extracted", "sid-registry.txt");
     const lines = readFileSync(outPath, "utf-8").split("\n");
     const entries = parseDataLines(lines);

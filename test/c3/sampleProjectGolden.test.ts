@@ -68,7 +68,7 @@ describe("construct3-chef-sample golden extracted/ output", () => {
     generateDSL(tmpRoot, outDir, noop);
     generateLayoutSummaries(tmpRoot, outDir, noop);
     generateTemplateScope(tmpRoot, outDir, noop);
-    generateSidRegistry(tmpRoot, "extracted", noop);
+    generateSidRegistry(tmpRoot, outDir, noop);
     generateGlobalLayers(tmpRoot, outDir, noop);
   });
 

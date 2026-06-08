@@ -503,9 +503,7 @@ export function findJsonFiles(dir: string): string[] {
   return walkFiles(dir, ".json");
 }
 
-export function generateSidRegistry(projectRoot: string, extractedDir = "extracted", log: Logger = console.log): void {
-  const outDir = path.join(projectRoot, extractedDir);
-
+export function generateSidRegistry(projectRoot: string, outDir: string, log: Logger = console.log): void {
   // Walk all SID-bearing source dirs (single source of truth: SID_SOURCE_DIRS).
   // findJsonFiles returns [] for missing dirs so partial projects work.
   // Exclude editor-local state (e.g. `layouts/uistate/*.instancesBar.json`): it

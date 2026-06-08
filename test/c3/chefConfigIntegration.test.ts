@@ -71,7 +71,7 @@ describe("chefConfig integration: extractedDir routing", () => {
 
     it("generateSidRegistry writes to the configured dir", async () => {
       const cfg = await loadChefConfig(tmpRoot);
-      generateSidRegistry(tmpRoot, cfg.extractedDir, noop);
+      generateSidRegistry(tmpRoot, path.join(tmpRoot, cfg.extractedDir), noop);
       expect(existsSync(path.join(tmpRoot, "my-out", "sid-registry.txt"))).to.be.true;
     });
 
@@ -134,7 +134,7 @@ describe("chefConfig integration: extractedDir routing", () => {
       tmpRoot = copyFixture();
       // applyParsed reads the sid-registry from opts.extractedDir to seed the
       // SID generator. We must pre-generate it in the custom dir before apply.
-      generateSidRegistry(tmpRoot, "my-out3", noop);
+      generateSidRegistry(tmpRoot, path.join(tmpRoot, "my-out3"), noop);
     });
 
     after(function () {

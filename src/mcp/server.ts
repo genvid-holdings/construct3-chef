@@ -129,13 +129,7 @@ const GENERATOR_STEPS = [
     fn: (log: Logger) => generateLayoutSummaries(PROJECT_ROOT, EXTRACTED_DIR, log),
   },
   { name: "Generating template scope", fn: (log: Logger) => generateTemplateScope(PROJECT_ROOT, EXTRACTED_DIR, log) },
-  {
-    name: "Generating SID registry",
-    // generateSidRegistry re-joins projectRoot internally, so it needs the
-    // *relative* dir (as cli.ts passes). Handing it the absolute EXTRACTED_DIR
-    // doubles the path — silently wrong on POSIX, an ENOENT crash on Windows.
-    fn: (log: Logger) => generateSidRegistry(PROJECT_ROOT, path.relative(PROJECT_ROOT, EXTRACTED_DIR), log),
-  },
+  { name: "Generating SID registry", fn: (log: Logger) => generateSidRegistry(PROJECT_ROOT, EXTRACTED_DIR, log) },
   { name: "Generating global layers", fn: (log: Logger) => generateGlobalLayers(PROJECT_ROOT, EXTRACTED_DIR, log) },
 ] as const;
 

@@ -66,6 +66,26 @@ function makeExtra(aborted = false): any {
   return { signal: ac.signal };
 }
 
+// cpSync stamps every copied file with ~the same mtime, and the recursive copy
+// order (readdir order — not alphabetical on all filesystems) decides whether
+// extracted/ ends up newer or older than the source dirs. checkSourceFreshness
+// compares those mtimes with a strict `source > extracted`, so on some CI
+// filesystems a freshly-copied fixture reads as spuriously stale. Force
+// extracted/ deterministically newer than source so the freshness check is
+// neutral and these tests drive staleness solely via __setExtractedDirty.
+function makeExtractedNewerThanSource(root: string): void {
+  const future = new Date(Date.now() + 3_600_000);
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else fs.utimesSync(full, future, future);
+    }
+  };
+  const extractedDir = path.join(root, "extracted");
+  if (fs.existsSync(extractedDir)) walk(extractedDir);
+}
+
 // ── Suite ─────────────────────────────────────────────────────────────────────
 
 describe("MCP server handler response shaping", () => {
@@ -75,6 +95,7 @@ describe("MCP server handler response shaping", () => {
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "c3chef-mcp-"));
     fs.cpSync(FIXTURE_DIR, tmp, { recursive: true });
+    makeExtractedNewerThanSource(tmp);
     __setProjectRoot(tmp);
     watcher = makeFakeWatcher(5);
     __setTestWatcher(watcher as any);

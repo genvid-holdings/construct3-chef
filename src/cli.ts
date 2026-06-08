@@ -55,7 +55,7 @@ function runGenerators(rootDir: string, extractedDir: string, only?: GeneratorNa
     { name: "dsl", run: () => generateDSL(rootDir, outDir, console.log) },
     { name: "layouts", run: () => generateLayoutSummaries(rootDir, outDir, console.log) },
     { name: "templates", run: () => generateTemplateScope(rootDir, outDir, console.log) },
-    { name: "sid-registry", run: () => generateSidRegistry(rootDir, extractedDir, console.log) },
+    { name: "sid-registry", run: () => generateSidRegistry(rootDir, outDir, console.log) },
     { name: "global-layers", run: () => generateGlobalLayers(rootDir, outDir, console.log) },
   ];
 

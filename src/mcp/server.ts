@@ -238,10 +238,16 @@ const PAGINATION_PARAMS = {
   limit: z.number().int().min(1).optional().describe("Max lines to return. Omit to return all."),
 };
 
-function paginatedResponse(text: string, offset: number | undefined, limit: number | undefined): CallToolResult {
+function paginatedResponse(
+  text: string,
+  offset: number | undefined,
+  limit: number | undefined,
+  opts?: { stale?: boolean },
+): CallToolResult {
   const result = paginatedContent(text, { offset, limit });
   const pageText = (result.content[0] as { text: string }).text;
-  return { content: [{ type: "text" as const, text: appendStaleWarning(pageText) }] };
+  const finalText = opts?.stale === false ? pageText : appendStaleWarning(pageText);
+  return { content: [{ type: "text" as const, text: finalText }] };
 }
 
 function globRelative(dir: string, ext: string): string[] {
@@ -305,14 +311,14 @@ reg(
   {
     title: "List Event Sheets",
     description:
-      "List all C3 event sheet JSON files in the project. Returns relative paths from the eventSheets/ root.",
+      "List all C3 event sheet JSON files in the project. Returns relative paths from the eventSheets/ root. Supports offset/limit pagination.",
     annotations: READ_ONLY,
-    inputSchema: {},
+    inputSchema: { ...PAGINATION_PARAMS },
   },
-  async () =>
+  async ({ offset, limit }) =>
     rwlock.read(async () => {
       const sheets = globRelative(path.join(PROJECT_ROOT, "eventSheets"), ".json");
-      return { content: [{ type: "text", text: sheets.join("\n") }] };
+      return paginatedResponse(sheets.join("\n"), offset, limit, { stale: false });
     }),
 );
 
@@ -320,14 +326,15 @@ reg(
   "list-layouts",
   {
     title: "List Layouts",
-    description: "List all C3 layout JSON files in the project. Returns relative paths from the layouts/ root.",
+    description:
+      "List all C3 layout JSON files in the project. Returns relative paths from the layouts/ root. Supports offset/limit pagination.",
     annotations: READ_ONLY,
-    inputSchema: {},
+    inputSchema: { ...PAGINATION_PARAMS },
   },
-  async () =>
+  async ({ offset, limit }) =>
     rwlock.read(async () => {
       const layouts = globRelative(path.join(PROJECT_ROOT, "layouts"), ".json");
-      return { content: [{ type: "text", text: layouts.join("\n") }] };
+      return paginatedResponse(layouts.join("\n"), offset, limit, { stale: false });
     }),
 );
 

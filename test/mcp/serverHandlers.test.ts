@@ -238,7 +238,93 @@ describe("MCP server handler response shaping", () => {
     expect(__getExtractedDirty()).to.be.false;
   });
 
-  // ── 8. apply-recipe CancelledError after source write ─────────────────────
+  // ── 8. list-event-sheets pagination ──────────────────────────────────────
+  // Fixture has 4 .json entries under eventSheets/ (sorted):
+  //   Event sheet 1.json, Event sheet 1.uistate.json,
+  //   Event sheet 2.json, Event sheet 2.uistate.json
+  // These are live filesystem reads — no stale warning even when dirty.
+
+  describe("list-event-sheets", () => {
+    it("no-params: one block, contains known fixture entry", async () => {
+      const handler = __getHandler("list-event-sheets")!;
+      expect(handler).to.exist;
+
+      const result = (await handler({}, makeExtra())) as any;
+
+      expect(result.content).to.have.length(1);
+      expect(result.content[0].type).to.equal("text");
+      // Sorted first entry in the fixture
+      expect(result.content[0].text).to.include("Event sheet 1.json");
+    });
+
+    it("offset/limit: single block with in-block range footer", async () => {
+      const handler = __getHandler("list-event-sheets")!;
+      expect(handler).to.exist;
+
+      const result = (await handler({ offset: 1, limit: 1 }, makeExtra())) as any;
+
+      expect(result.content).to.have.length(1);
+      expect(result.content[0].type).to.equal("text");
+      expect(result.content[0].text).to.match(/\nlines: \d+-\d+ \/ \d+$/);
+    });
+
+    it("no stale warning even when extractedDirty=true", async () => {
+      const handler = __getHandler("list-event-sheets")!;
+      expect(handler).to.exist;
+
+      __setExtractedDirty(true);
+      const result = (await handler({}, makeExtra())) as any;
+
+      expect(result.content[0].text).to.not.include(STALE_WARNING);
+    });
+  });
+
+  // ── 9. list-layouts pagination ────────────────────────────────────────────
+  // Fixture has 9 .json entries under layouts/ (sorted):
+  //   Main Layout.json, Main Layout.uistate.json,
+  //   Second Layout.json, Second Layout.uistate.json,
+  //   Templates Layout.json, Templates Layout.uistate.json,
+  //   uistate/Main Layout.instancesBar.json,
+  //   uistate/Second Layout.instancesBar.json,
+  //   uistate/Templates Layout.instancesBar.json
+  // These are live filesystem reads — no stale warning even when dirty.
+
+  describe("list-layouts", () => {
+    it("no-params: one block, contains known fixture entry", async () => {
+      const handler = __getHandler("list-layouts")!;
+      expect(handler).to.exist;
+
+      const result = (await handler({}, makeExtra())) as any;
+
+      expect(result.content).to.have.length(1);
+      expect(result.content[0].type).to.equal("text");
+      // Sorted first entry in the fixture
+      expect(result.content[0].text).to.include("Main Layout.json");
+    });
+
+    it("offset/limit: single block with in-block range footer", async () => {
+      const handler = __getHandler("list-layouts")!;
+      expect(handler).to.exist;
+
+      const result = (await handler({ offset: 1, limit: 1 }, makeExtra())) as any;
+
+      expect(result.content).to.have.length(1);
+      expect(result.content[0].type).to.equal("text");
+      expect(result.content[0].text).to.match(/\nlines: \d+-\d+ \/ \d+$/);
+    });
+
+    it("no stale warning even when extractedDirty=true", async () => {
+      const handler = __getHandler("list-layouts")!;
+      expect(handler).to.exist;
+
+      __setExtractedDirty(true);
+      const result = (await handler({}, makeExtra())) as any;
+
+      expect(result.content[0].text).to.not.include(STALE_WARNING);
+    });
+  });
+
+  // ── 10. apply-recipe CancelledError after source write ────────────────────
   // Aborted signal causes checkCancelled() to throw inside runGenerators AFTER
   // applyParsed has already written source files.
 

@@ -189,6 +189,10 @@ yargs(hideBin(process.argv))
     (argv) => {
       const rootDir = resolveProjectDir(argv);
       runSync(rootDir, false, console.log, argv.section);
+      // Images aren't a manifest section, so sync never acts on image drift — but
+      // surface it (detection-only) so a direct sync, without a prior validate, still
+      // shows it. Reported unconditionally, mirroring validate-project (#52).
+      reportImageDrift(rootDir, console.log);
     },
   )
   .command(

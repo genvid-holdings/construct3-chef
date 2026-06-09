@@ -255,6 +255,15 @@ describe("syncC3Proj", () => {
       const drift = detectImageDrift(sampleProjectDir);
       assert.deepEqual(drift?.entries ?? [], [], "no false missing/untracked pair for the jpeg asset");
     });
+
+    // sync-project now also surfaces this line (#52), so pin reportImageDrift's
+    // rendered no-drift output, not just detectImageDrift's data.
+    it("reportImageDrift emits a single (no drift) line on the clean fixture", () => {
+      const lines: string[] = [];
+      reportImageDrift(sampleProjectDir, (m) => lines.push(m));
+      assert.lengthOf(lines, 1);
+      assert.match(lines[0], /^\[images\]\s+\(no drift\)$/);
+    });
   });
 
   describe("reportImageDrift error guard", () => {

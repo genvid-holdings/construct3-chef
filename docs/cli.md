@@ -139,7 +139,9 @@ Replacements are sorted longest-first to prevent substring corruption.
 
 Dry-run check that `project.c3proj` matches files on disk. Exits with code 1 if drift is detected.
 
-It additionally reports **image drift** as `[images]` lines: image files expected by an object type (derived from `objectTypes/` JSON — an `image` key, or `animations` frames) but missing from `images/` on disk, or files in `images/` no object type references. Image drift is **detection-only** — informational output that does **not** affect the exit code or `sync-project`'s write-back (images are referenced inside object-type JSON, not declared as `project.c3proj` entries).
+It additionally reports **image drift** as `[images]` lines: image files expected by an object type (derived from `objectTypes/` JSON — an `image` key, or `animations` frames) but missing from `images/` on disk, or files in `images/` no object type references. Image drift is **detection-only** — informational output that does **not** affect the exit code or `sync-project`'s write-back (images are referenced inside object-type JSON, not declared as `project.c3proj` entries). The same `[images]` report is also emitted by `sync-project` (see below).
+
+The derivation covers structural name-match drift only — single-image plugins (`<name>.<ext>`) and `animations` frames (`<name>-<anim>-NNN.<ext>`, extension from each member's `fileType`). It intentionally does **not** cover spritesheet/texture-atlas packing or collision-polygon / image-point sidecar files. That non-coverage is **moot for a C3 source project**: animation frames are stored as individual files on disk (atlas packing is an export-time transform), and collision/image-point data lives inline in the frame JSON, not as separate sidecar files — so neither case can appear in `images/`. Were packed atlases ever to become a target, the derivation change would belong upstream in `@genvid/c3source` (`deriveExpectedImageNames`), not here.
 
 ```bash
 npx construct3-chef validate-project [--section <section>] [--project-dir <path>]
@@ -164,6 +166,8 @@ npx construct3-chef sync-project [--section <section>] [--project-dir <path>]
 | `--section <section>` | Only sync one section |
 
 Run this after adding or removing files in tracked C3 directories (event sheets, layouts, object types, scripts, etc.).
+
+Like `validate-project`, it emits the detection-only `[images]` drift report after syncing — so a direct sync (without a prior validate) still surfaces image drift. Sync never *acts* on image drift; images aren't a manifest section.
 
 ---
 

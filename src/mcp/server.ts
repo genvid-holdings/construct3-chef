@@ -974,6 +974,10 @@ reg(
           runSync(PROJECT_ROOT, false, log);
         });
         watcher.bump();
+        // Detection-only: images aren't a manifest section so sync can't act on
+        // image drift, but surface it (read-only) so a direct sync still shows it,
+        // mirroring validate-project (#52).
+        reportImageDrift(PROJECT_ROOT, log);
         return {
           content: [
             { type: "text", text: text() },

@@ -179,9 +179,8 @@ describe("MCP server handler response shaping", () => {
     const result = (await handler({ recipe: "{}", txId: 4 }, makeExtra())) as any;
 
     expect(result.isError).to.be.true;
-    expect(result.content).to.have.length(2);
-    expect(result.content[0].text).to.equal("State changed (expected 4, got 5) — re-validate before applying");
-    expect(result.content[1].text).to.equal("txId: 5");
+    expect(result.content).to.have.length(1);
+    expect(result.content[0].text).to.equal("State changed (expected 4, got 5) — re-validate before applying\ntxId: 5");
     expect(watcher.bumped).to.equal(0);
   });
 
@@ -195,16 +194,16 @@ describe("MCP server handler response shaping", () => {
     const result = (await handler({ recipe: "{ not json", txId: 5 }, makeExtra())) as any;
 
     expect(result.isError).to.be.true;
-    expect(result.content).to.have.length(2);
+    expect(result.content).to.have.length(1);
     expect(result.content[0].text).to.match(/^Error:/);
-    expect(result.content[1].text).to.equal("txId: 5");
+    expect(result.content[0].text).to.include("txId: 5");
     expect(watcher.bumped).to.equal(0);
     expect(__getExtractedDirty()).to.be.true;
   });
 
   // ── 6. apply-recipe success with regenerate:false ─────────────────────────
 
-  it("apply-recipe succeeds (regenerate:false): two blocks, txId bumped once, no isError", async () => {
+  it("apply-recipe succeeds (regenerate:false): one block, txId bumped once, no isError", async () => {
     const handler = __getHandler("apply-recipe")!;
     expect(handler).to.exist;
 
@@ -212,8 +211,8 @@ describe("MCP server handler response shaping", () => {
     const result = (await handler({ recipe: VALID_RECIPE, txId: 5, regenerate: false }, makeExtra())) as any;
 
     expect(result.isError).to.be.undefined;
-    expect(result.content).to.have.length(2);
-    expect(result.content[1].text).to.equal("txId: 6");
+    expect(result.content).to.have.length(1);
+    expect(result.content[0].text).to.include("txId: 6");
     expect(watcher.bumped).to.equal(1);
     // regenerate:false should NOT clear dirty
     // (dirty was true; test verifies it stays unchanged from this handler's perspective)
@@ -232,8 +231,8 @@ describe("MCP server handler response shaping", () => {
     const result = (await handler({ recipe: VALID_RECIPE, txId: 5 }, makeExtra())) as any;
 
     expect(result.isError).to.be.undefined;
-    expect(result.content).to.have.length(2);
-    expect(result.content[1].text).to.equal("txId: 6");
+    expect(result.content).to.have.length(1);
+    expect(result.content[0].text).to.include("txId: 6");
     expect(watcher.bumped).to.equal(1);
     // a full regenerate clears the stale flag
     expect(__getExtractedDirty()).to.be.false;
@@ -251,9 +250,9 @@ describe("MCP server handler response shaping", () => {
     const result = (await handler({ recipe: VALID_RECIPE }, makeExtra(true))) as any;
 
     expect(result.isError).to.be.true;
-    expect(result.content).to.have.length(2);
+    expect(result.content).to.have.length(1);
     expect(result.content[0].text).to.include("Cancelled");
-    expect(result.content[1].text).to.equal("txId: 6");
+    expect(result.content[0].text).to.match(/\ntxId: 6$/);
     expect(watcher.bumped).to.equal(1);
     expect(__getExtractedDirty()).to.be.true;
   });

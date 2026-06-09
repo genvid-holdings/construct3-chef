@@ -11,6 +11,8 @@ import {
   ExpectedChanges,
   OptimisticWatcher,
   paginatedContent,
+  mcpContent,
+  mcpError,
   exposeDocs,
   bufferingLogger,
   resolveWithin,
@@ -160,26 +162,7 @@ function readExtracted(relPath: string): string | null {
   return fs.readFileSync(fullPath, "utf-8");
 }
 
-function notFound(tool: string, hint: string): { content: { type: "text"; text: string }[]; isError: true } {
-  return {
-    content: [{ type: "text", text: `${tool}: ${hint}` }],
-    isError: true,
-  };
-}
-
-function errorWithTxId(message: string): { content: { type: "text"; text: string }[]; isError: true } {
-  return {
-    content: [
-      { type: "text", text: message },
-      { type: "text", text: `txId: ${watcher.txId}` },
-    ],
-    isError: true,
-  };
-}
-
-function caughtError(e: unknown): { content: { type: "text"; text: string }[]; isError: true } {
-  return errorWithTxId(`Error: ${e instanceof Error ? e.message : String(e)}`);
-}
+const txIdLine = () => `txId: ${watcher.txId}`;
 
 const STALE_WARNING = "\n\n[Warning: extracted files may be stale — run regenerate to refresh]";
 
@@ -360,7 +343,9 @@ reg(
     rwlock.read(async () => {
       const text = readExtracted("global-layers.txt");
       if (text === null) {
-        return notFound("list-global-layers", "global-layers.txt not found. Run 'regenerate' to generate it.");
+        return mcpError("global-layers.txt not found. Run 'regenerate' to generate it.", {
+          prefix: "list-global-layers:",
+        });
       }
       return paginatedResponse(text, offset, limit);
     }),
@@ -388,7 +373,9 @@ reg(
       );
       const text = readExtracted(`eventSheets/${sheet}.dsl.txt`);
       if (text === null) {
-        return notFound("read-dsl", `No DSL file found for '${sheet}'. Use list-event-sheets to see available sheets.`);
+        return mcpError(`No DSL file found for '${sheet}'. Use list-event-sheets to see available sheets.`, {
+          prefix: "read-dsl:",
+        });
       }
       return paginatedResponse(text, offset, limit);
     }),
@@ -418,10 +405,9 @@ reg(
       );
       let text = readExtracted(`eventSheets/${sheet}.dsl.idx.txt`);
       if (text === null) {
-        return notFound(
-          "read-dsl-index",
-          `No DSL index file found for '${sheet}'. Use list-event-sheets to see available sheets.`,
-        );
+        return mcpError(`No DSL index file found for '${sheet}'. Use list-event-sheets to see available sheets.`, {
+          prefix: "read-dsl-index:",
+        });
       }
       if (grep) {
         text = filterIndex(text, grep);
@@ -453,10 +439,9 @@ reg(
     rwlock.read(async () => {
       const sourcePath = path.join(PROJECT_ROOT, "eventSheets", `${sheet}.json`);
       if (!fs.existsSync(sourcePath)) {
-        return notFound(
-          "read-event-sids",
-          `No event sheet found for '${sheet}'. Use list-event-sheets to see available sheets.`,
-        );
+        return mcpError(`No event sheet found for '${sheet}'. Use list-event-sheets to see available sheets.`, {
+          prefix: "read-event-sids:",
+        });
       }
       const raw = fs.readFileSync(sourcePath, "utf-8");
       const parsed = JSON.parse(raw) as EventSheet;
@@ -496,9 +481,11 @@ reg(
       );
       const text = readExtracted(`eventSheets/${sheet}.ts`);
       if (text === null) {
-        return notFound(
-          "read-scripts",
+        return mcpError(
           `No extracted TypeScript found for '${sheet}'. Use list-event-sheets to see available sheets.`,
+          {
+            prefix: "read-scripts:",
+          },
         );
       }
       return paginatedResponse(text, offset, limit);
@@ -525,10 +512,9 @@ reg(
       );
       const text = readExtracted(`layouts/${layout}.layout.txt`);
       if (text === null) {
-        return notFound(
-          "read-layout",
-          `No layout summary found for '${layout}'. Use list-layouts to see available layouts.`,
-        );
+        return mcpError(`No layout summary found for '${layout}'. Use list-layouts to see available layouts.`, {
+          prefix: "read-layout:",
+        });
       }
       return paginatedResponse(text, offset, limit);
     }),
@@ -549,10 +535,9 @@ reg(
     rwlock.read(async () => {
       const text = readExtracted("template-scope.txt");
       if (text === null) {
-        return notFound(
-          "read-template-scope",
-          "template-scope.txt not found. Run 'npm run generate-c3' to generate it.",
-        );
+        return mcpError("template-scope.txt not found. Run 'npm run generate-c3' to generate it.", {
+          prefix: "read-template-scope:",
+        });
       }
       return paginatedResponse(text, offset, limit);
     }),
@@ -571,7 +556,9 @@ reg(
     rwlock.read(async () => {
       const text = readExtracted("sid-registry.txt");
       if (text === null) {
-        return notFound("read-sid-registry", "sid-registry.txt not found. Run 'npm run generate-c3' to generate it.");
+        return mcpError("sid-registry.txt not found. Run 'npm run generate-c3' to generate it.", {
+          prefix: "read-sid-registry:",
+        });
       }
       return paginatedResponse(text, offset, limit);
     }),
@@ -611,7 +598,7 @@ reg(
       try {
         const registryPath = path.join(EXTRACTED_DIR, "sid-registry.txt");
         if (!fs.existsSync(registryPath)) {
-          return notFound("generate-sids", "sid-registry.txt not found. Run 'regenerate' first.");
+          return mcpError("sid-registry.txt not found. Run 'regenerate' first.", { prefix: "generate-sids:" });
         }
         checkRegistryFreshness(registryPath);
         const used = readRegistryFile(registryPath);
@@ -621,8 +608,7 @@ reg(
         const text = appendStaleWarning(`${header}\n${sids.join("\n")}`);
         return { content: [{ type: "text", text }] };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return { content: [{ type: "text", text: `generate-sids: ${msg}` }], isError: true };
+        return mcpError(e, { prefix: "generate-sids:" });
       }
     }),
 );
@@ -684,7 +670,7 @@ reg(
   async ({ pattern, type, path: searchPath, context }) =>
     rwlock.read(async () => {
       if (!pattern) {
-        return notFound("search", "Pattern cannot be empty. Provide a regex pattern to search for.");
+        return mcpError("Pattern cannot be empty. Provide a regex pattern to search for.", { prefix: "search:" });
       }
 
       try {
@@ -712,7 +698,7 @@ reg(
 
         return { content: [{ type: "text", text }] };
       } catch (e) {
-        return notFound("search", e instanceof Error ? e.message : String(e));
+        return mcpError(e instanceof Error ? e.message : String(e), { prefix: "search:" });
       }
     }),
 );
@@ -740,20 +726,19 @@ reg(
       );
       const text = readExtracted(`eventSheets/${sheet}.dsl.idx.txt`);
       if (text === null) {
-        return notFound(
-          "resolve-anchor",
-          `No DSL index file found for '${sheet}'. Use list-event-sheets to see available sheets.`,
-        );
+        return mcpError(`No DSL index file found for '${sheet}'. Use list-event-sheets to see available sheets.`, {
+          prefix: "resolve-anchor:",
+        });
       }
 
       let lookup: Parameters<typeof resolveAnchor>[1];
       if (by === "line") {
         const line = parseInt(value, 10);
-        if (isNaN(line)) return notFound("resolve-anchor", `Invalid line number: '${value}'`);
+        if (isNaN(line)) return mcpError(`Invalid line number: '${value}'`, { prefix: "resolve-anchor:" });
         lookup = { by: "line", line };
       } else if (by === "sid") {
         const sid = parseInt(value, 10);
-        if (isNaN(sid)) return notFound("resolve-anchor", `Invalid SID: '${value}'`);
+        if (isNaN(sid)) return mcpError(`Invalid SID: '${value}'`, { prefix: "resolve-anchor:" });
         lookup = { by: "sid", sid };
       } else {
         lookup = { by: "name", name: value };
@@ -811,17 +796,12 @@ reg(
         const recipe: Recipe = JSON.parse(recipeJson);
         const errors = validateRecipe(recipe);
         if (errors.length > 0) {
-          return errorWithTxId(`Validation errors:\n${errors.join("\n")}`);
+          return mcpError(`Validation errors:\n${errors.join("\n")}`, { extraLines: [txIdLine()] });
         }
         applyParsed(PROJECT_ROOT, recipe, { dryRun: true, log });
-        return {
-          content: [
-            { type: "text", text: text() },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-        };
+        return mcpContent(text(), txIdLine());
       } catch (e) {
-        return caughtError(e);
+        return mcpError(e, { prefix: "Error:", extraLines: [txIdLine()] });
       }
     }),
 );
@@ -850,8 +830,9 @@ reg(
       const { log, text } = bufferingLogger();
       try {
         if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-          return errorWithTxId(
+          return mcpError(
             `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying`,
+            { extraLines: [txIdLine()] },
           );
         }
         const recipe: Recipe = JSON.parse(recipeJson);
@@ -867,19 +848,14 @@ reg(
         if (shouldRegenerate) {
           extractedDirty = false;
         }
-        return {
-          content: [
-            { type: "text", text: text() },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-        };
+        return mcpContent(text(), txIdLine());
       } catch (e) {
         if (e instanceof CancelledError) {
           // Recipe already applied (source files modified) but regeneration interrupted
           watcher.bump();
           extractedDirty = true;
         }
-        return caughtError(e);
+        return mcpError(e, { prefix: "Error:", extraLines: [txIdLine()] });
       }
     }),
 );
@@ -904,18 +880,13 @@ reg(
           await runGenerators(log, extra);
         });
         extractedDirty = false;
-        return {
-          content: [{ type: "text", text: text() }],
-        };
+        return mcpContent(text());
       } catch (e) {
         if (e instanceof CancelledError) {
           // Partially regenerated — stale. No watcher.bump() (regenerate doesn't modify source files)
           extractedDirty = true;
         }
-        return {
-          content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
-          isError: true,
-        };
+        return mcpError(e, { prefix: "Error:" });
       }
     }),
 );
@@ -937,14 +908,9 @@ reg(
       try {
         runSync(PROJECT_ROOT, true, log);
         reportImageDrift(PROJECT_ROOT, log);
-        return {
-          content: [
-            { type: "text", text: text() },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-        };
+        return mcpContent(text(), txIdLine());
       } catch (e) {
-        return caughtError(e);
+        return mcpError(e, { prefix: "Error:", extraLines: [txIdLine()] });
       }
     }),
 );
@@ -965,8 +931,9 @@ reg(
       const { log, text } = bufferingLogger();
       try {
         if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-          return errorWithTxId(
+          return mcpError(
             `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before syncing`,
+            { extraLines: [txIdLine()] },
           );
         }
         // Suppress watcher — we manage txId ourselves
@@ -978,14 +945,9 @@ reg(
         // image drift, but surface it (read-only) so a direct sync still shows it,
         // mirroring validate-project (#52).
         reportImageDrift(PROJECT_ROOT, log);
-        return {
-          content: [
-            { type: "text", text: text() },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-        };
+        return mcpContent(text(), txIdLine());
       } catch (e) {
-        return caughtError(e);
+        return mcpError(e, { prefix: "Error:", extraLines: [txIdLine()] });
       }
     }),
 );
@@ -1041,9 +1003,9 @@ reg(
       }
 
       if (!addonPath) {
-        return notFound(
-          "read-addon",
+        return mcpError(
           `Addon '${name}' not installed locally — extract from addons/plugin/${name}.c3addon or addons/effect/${name}.c3addon first`,
+          { prefix: "read-addon:" },
         );
       }
 
@@ -1052,11 +1014,13 @@ reg(
       // Path traversal check — reject paths that escape the addon directory
       const filePath = resolveWithin(addonPath, targetFile);
       if (filePath === null) {
-        return notFound("read-addon", `Invalid file path '${targetFile}' — must stay within addon directory`);
+        return mcpError(`Invalid file path '${targetFile}' — must stay within addon directory`, {
+          prefix: "read-addon:",
+        });
       }
 
       if (!fs.existsSync(filePath)) {
-        return notFound("read-addon", `File '${targetFile}' not found in addon '${name}'`);
+        return mcpError(`File '${targetFile}' not found in addon '${name}'`, { prefix: "read-addon:" });
       }
 
       const content = fs.readFileSync(filePath, "utf-8");
@@ -1093,8 +1057,9 @@ reg(
       const { log, text } = bufferingLogger();
       try {
         if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-          return errorWithTxId(
+          return mcpError(
             `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding`,
+            { extraLines: [txIdLine()] },
           );
         }
 
@@ -1103,16 +1068,18 @@ reg(
         // Path traversal check — output must stay within layouts/
         const outFullPath = resolveWithin(layoutsDir, outRelPath);
         if (outFullPath === null) {
-          return errorWithTxId(`Invalid output path '${outRelPath}' — must stay within layouts/`);
+          return mcpError(`Invalid output path '${outRelPath}' — must stay within layouts/`, {
+            extraLines: [txIdLine()],
+          });
         }
 
         // Path traversal check — source must stay within layouts/
         const sourceFullPath = resolveWithin(layoutsDir, source);
         if (sourceFullPath === null) {
-          return errorWithTxId(`Invalid source path '${source}' — must stay within layouts/`);
+          return mcpError(`Invalid source path '${source}' — must stay within layouts/`, { extraLines: [txIdLine()] });
         }
         if (!fs.existsSync(sourceFullPath)) {
-          return errorWithTxId(`Source layout not found: layouts/${source}`);
+          return mcpError(`Source layout not found: layouts/${source}`, { extraLines: [txIdLine()] });
         }
 
         const sourceContent = fs.readFileSync(sourceFullPath, "utf-8");
@@ -1150,19 +1117,14 @@ reg(
         if (shouldRegenerate) {
           extractedDirty = false;
         }
-        return {
-          content: [
-            { type: "text", text: text() },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-        };
+        return mcpContent(text(), txIdLine());
       } catch (e) {
         if (e instanceof CancelledError) {
           // Layout was already written — source files changed, extracted/ is stale
           watcher.bump();
           extractedDirty = true;
         }
-        return caughtError(e);
+        return mcpError(e, { prefix: "Error:", extraLines: [txIdLine()] });
       }
     }),
 );
@@ -1185,8 +1147,9 @@ reg(
       const { log, text } = bufferingLogger();
       try {
         if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-          return errorWithTxId(
+          return mcpError(
             `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding`,
+            { extraLines: [txIdLine()] },
           );
         }
 
@@ -1199,14 +1162,16 @@ reg(
           ["name", targetName],
         ] as const) {
           if (val.includes("/") || val.includes("\\") || val.includes("..")) {
-            return errorWithTxId(`Invalid ${label} '${val}' — must be a plain objectType name without path separators`);
+            return mcpError(`Invalid ${label} '${val}' — must be a plain objectType name without path separators`, {
+              extraLines: [txIdLine()],
+            });
           }
         }
 
         // Read source objectType
         const sourceFile = path.join(objectTypesDir, `${source}.json`);
         if (!fs.existsSync(sourceFile)) {
-          return errorWithTxId(`Source objectType not found: objectTypes/${source}.json`);
+          return mcpError(`Source objectType not found: objectTypes/${source}.json`, { extraLines: [txIdLine()] });
         }
 
         const sourceContent = fs.readFileSync(sourceFile, "utf-8");
@@ -1245,19 +1210,14 @@ reg(
         });
 
         watcher.bump();
-        return {
-          content: [
-            { type: "text", text: text() },
-            { type: "text", text: `txId: ${watcher.txId}` },
-          ],
-        };
+        return mcpContent(text(), txIdLine());
       } catch (e) {
         if (e instanceof CancelledError) {
           // Sprite was already written — source files changed, extracted/ may be stale
           watcher.bump();
           extractedDirty = true;
         }
-        return caughtError(e);
+        return mcpError(e, { prefix: "Error:", extraLines: [txIdLine()] });
       }
     }),
 );
@@ -1279,16 +1239,16 @@ async function runWorkflowRecipe(
   expectedTxId: number | undefined,
   regenerate: boolean | undefined,
   extra: Extra,
-): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+): Promise<CallToolResult> {
   checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
   const shouldRegenerate = regenerate !== false;
   const totalSteps = shouldRegenerate ? 7 : 1; // apply + 6 generators
   const { log, text } = bufferingLogger();
   try {
     if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-      return errorWithTxId(
-        `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying`,
-      );
+      return mcpError(`State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying`, {
+        extraLines: [txIdLine()],
+      });
     }
     await watcher.suppress(async () => {
       await sendProgress(extra, 0, totalSteps, "Applying workflow");
@@ -1301,18 +1261,13 @@ async function runWorkflowRecipe(
     if (shouldRegenerate) {
       extractedDirty = false;
     }
-    return {
-      content: [
-        { type: "text", text: text() },
-        { type: "text", text: `txId: ${watcher.txId}` },
-      ],
-    };
+    return mcpContent(text(), txIdLine());
   } catch (e) {
     if (e instanceof CancelledError) {
       watcher.bump();
       extractedDirty = true;
     }
-    return caughtError(e);
+    return mcpError(e, { prefix: "Error:", extraLines: [txIdLine()] });
   }
 }
 
@@ -1530,7 +1485,7 @@ reg(
       const layoutsDir = path.join(PROJECT_ROOT, "layouts");
       const layoutFullPath = resolveWithin(layoutsDir, layout);
       if (layoutFullPath === null) {
-        return errorWithTxId(`Invalid layout path '${layout}' — must stay within layouts/`);
+        return mcpError(`Invalid layout path '${layout}' — must stay within layouts/`, { extraLines: [txIdLine()] });
       }
 
       const recipe: Recipe = {

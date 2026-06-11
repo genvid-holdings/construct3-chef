@@ -61,6 +61,7 @@ import {
 } from "../c3/navigationGraph.js";
 import { resolveNavConvention } from "../c3/navConvention.js";
 import { discoverAddons, findAddonExtractedDir } from "../c3/addonDiscovery.js";
+import { lookup } from "../c3/aceLookup.js";
 
 let PROJECT_ROOT = process.cwd();
 let EXTRACTED_DIR = path.join(PROJECT_ROOT, "extracted");
@@ -1069,6 +1070,98 @@ reg(
     }),
 );
 
+// ── Search Docs Tool ─────────────────────────────────────────────────────────
+
+reg(
+  "search-docs",
+  {
+    title: "Search C3 Docs",
+    description:
+      "Look up C3 ACE (action/condition/expression) reference — parameter names/types, expression syntax, and condition/action ids — for the project's custom addons and (when a c3-reference cache is present) built-in plugins, layouts, scripting, and the Expression language. Filter by object/plugin name, ace id, param name, or free-text query. Custom-addon coverage is always available; built-in/manual coverage requires the genvid-c3 build-reference skill to populate <extractedDir>/c3-reference/.",
+    annotations: READ_ONLY,
+    inputSchema: {
+      query: z.string().optional().describe("Free-text search query"),
+      object: z.string().optional().describe("Filter by object/plugin name (case-insensitive exact match for ACEs)"),
+      id: z.string().optional().describe("Filter by ACE id (exact, case-insensitive)"),
+      param: z.string().optional().describe("Filter by ACE param name (substring, case-insensitive)"),
+      offset: z.number().int().min(0).optional().describe("Start line (1-based). Omit to start from beginning."),
+      limit: z.number().int().min(1).optional().describe("Max lines to return. Omit to return all."),
+    },
+  },
+  async ({ query, object, id, param, offset, limit }) =>
+    rwlock.read(
+      withMcpErrors(
+        async () => {
+          // No-filter guard
+          const hasQuery = query !== undefined && query !== "";
+          const hasObject = object !== undefined && object !== "";
+          const hasId = id !== undefined && id !== "";
+          const hasParam = param !== undefined && param !== "";
+          if (!hasQuery && !hasObject && !hasId && !hasParam) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: "Provide at least one filter: query, object, id, or param.",
+                },
+              ],
+            };
+          }
+
+          const { aces, chunks, cachePresent } = lookup(PROJECT_ROOT, EXTRACTED_DIR, {
+            query: hasQuery ? query : undefined,
+            object: hasObject ? object : undefined,
+            id: hasId ? id : undefined,
+            param: hasParam ? param : undefined,
+          });
+
+          emitLog(
+            "info",
+            `search-docs: object=${object ?? "-"}, id=${id ?? "-"}, param=${param ?? "-"}, query=${query ?? "-"}, aces=${aces.length}, chunks=${chunks.length}, cache=${cachePresent}`,
+          );
+
+          const noCacheNote = cachePresent
+            ? ""
+            : "\n(no c3-reference cache — only custom-addon ACEs available; run the genvid-c3 build-reference skill for built-in/layout/scripting/expression coverage)";
+
+          let text: string;
+          if (aces.length === 0 && chunks.length === 0) {
+            text = `No results found.${noCacheNote}`;
+          } else {
+            const lines: string[] = [`${aces.length} ACE(s), ${chunks.length} doc chunk(s)`];
+            if (!cachePresent) {
+              lines.push(noCacheNote.trimStart());
+            }
+
+            for (const ace of aces) {
+              const paramNames = ace.params.map((p) => p.name).join(", ");
+              let line = `[${ace.source} ${ace.kind}] ${ace.objectClass}.${ace.id}(${paramNames})`;
+              if (ace.scriptName) line += ` — script:${ace.scriptName}`;
+              if (ace.description) line += ` — ${ace.description}`;
+              if (ace.canonicalUrl) line += `  [${ace.canonicalUrl}]`;
+              lines.push(line);
+            }
+
+            if (chunks.length > 0) {
+              lines.push("");
+              for (const chunk of chunks) {
+                const truncated = chunk.text.replace(/\r?\n/g, " ").slice(0, 200);
+                let line = `[${chunk.category}] ${chunk.title} — ${truncated}`;
+                if (chunk.canonicalUrl) line += `  [${chunk.canonicalUrl}]`;
+                lines.push(line);
+              }
+            }
+
+            text = lines.join("\n");
+          }
+
+          return paginatedResponse(text, offset, limit, { stale: false });
+        },
+        { prefix: "search-docs:" },
+      ),
+    ),
+);
+
 // ── Scaffold Tools ──────────────────────────────────────────────────────
 
 reg(
@@ -1602,6 +1695,9 @@ export function __getExtractedDirty(): boolean {
 export function __setProjectRoot(dir: string): void {
   PROJECT_ROOT = dir;
   EXTRACTED_DIR = path.join(dir, "extracted");
+}
+export function __setExtractedDir(dir: string): void {
+  EXTRACTED_DIR = dir;
 }
 export function __resetTestState(): void {
   extractedDirty = false;

@@ -855,6 +855,64 @@ reg(
     ),
 );
 
+/**
+ * Core apply orchestration: parse-already-done recipe → write lock → apply →
+ * optionally regenerate. Encapsulates concurrency boilerplate so op-<name>
+ * tools can reuse the exact same flow without duplicating rwlock/watcher logic.
+ *
+ * Module-internal — NOT exported on the public barrel.
+ */
+async function applyRecipeWithConcurrency(
+  recipe: Recipe,
+  opts: { expectedTxId?: number; regenerate?: boolean; label?: string },
+  extra: Extra,
+): Promise<CallToolResult> {
+  return rwlock.write(
+    withMcpErrors(
+      async () => {
+        // Refresh extractedDirty before the txId check — catches external edits the
+        // file watcher may have missed, so a stale registry doesn't seed `mintUniqueSid`
+        // with SIDs that already exist on disk.
+        checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
+        const shouldRegenerate = opts.regenerate !== false;
+        const totalSteps = shouldRegenerate ? 7 : 1; // apply + 6 generators
+        const { log, text } = bufferingLogger();
+        if (opts.expectedTxId !== undefined && opts.expectedTxId !== watcher.txId) {
+          return mcpError(
+            `State changed (expected ${opts.expectedTxId}, got ${watcher.txId}) — re-validate before applying`,
+            { extraLines: [txIdLine()] },
+          );
+        }
+        const label = opts.label ?? "Applying recipe";
+        // Suppress watcher during writes — we manage txId/extractedDirty ourselves
+        await watcher.suppress(async () => {
+          await sendProgress(extra, 0, totalSteps, label);
+          applyParsed(PROJECT_ROOT, recipe, { regenerate: false, log });
+          if (shouldRegenerate) {
+            await runGenerators(log, extra, 1, totalSteps);
+          }
+        });
+        watcher.bump();
+        if (shouldRegenerate) {
+          extractedDirty = false;
+        }
+        return mcpContent(text(), txIdLine());
+      },
+      {
+        prefix: "Error:",
+        onError: (e) => {
+          if (e instanceof CancelledError) {
+            // Recipe already applied (source files modified) but regeneration interrupted
+            watcher.bump();
+            extractedDirty = true;
+          }
+        },
+        extraLines: () => [txIdLine()],
+      },
+    ),
+  );
+}
+
 reg(
   "apply-recipe",
   {
@@ -868,51 +926,15 @@ reg(
       regenerate: z.boolean().optional().describe("Regenerate extracted/ files after applying (default: true)"),
     },
   },
-  async ({ recipe: recipeJson, txId: expectedTxId, regenerate }, extra: Extra) =>
-    rwlock.write(
-      withMcpErrors(
-        async () => {
-          // Refresh extractedDirty before the txId check — catches external edits the
-          // file watcher may have missed, so a stale registry doesn't seed `mintUniqueSid`
-          // with SIDs that already exist on disk.
-          checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
-          const shouldRegenerate = regenerate !== false;
-          const totalSteps = shouldRegenerate ? 7 : 1; // apply + 6 generators
-          const { log, text } = bufferingLogger();
-          if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-            return mcpError(
-              `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying`,
-              { extraLines: [txIdLine()] },
-            );
-          }
-          const recipe: Recipe = JSON.parse(recipeJson);
-          // Suppress watcher during writes — we manage txId/extractedDirty ourselves
-          await watcher.suppress(async () => {
-            await sendProgress(extra, 0, totalSteps, "Applying recipe");
-            applyParsed(PROJECT_ROOT, recipe, { regenerate: false, log });
-            if (shouldRegenerate) {
-              await runGenerators(log, extra, 1, totalSteps);
-            }
-          });
-          watcher.bump();
-          if (shouldRegenerate) {
-            extractedDirty = false;
-          }
-          return mcpContent(text(), txIdLine());
-        },
-        {
-          prefix: "Error:",
-          onError: (e) => {
-            if (e instanceof CancelledError) {
-              // Recipe already applied (source files modified) but regeneration interrupted
-              watcher.bump();
-              extractedDirty = true;
-            }
-          },
-          extraLines: () => [txIdLine()],
-        },
-      ),
-    ),
+  async ({ recipe: recipeJson, txId: expectedTxId, regenerate }, extra: Extra) => {
+    let recipe: Recipe;
+    try {
+      recipe = JSON.parse(recipeJson);
+    } catch (e) {
+      return mcpError(e, { prefix: "Error:", extraLines: [txIdLine()] });
+    }
+    return applyRecipeWithConcurrency(recipe, { expectedTxId, regenerate }, extra);
+  },
 );
 
 // ── Regenerate Tool ─────────────────────────────────────────────────────────

@@ -684,6 +684,8 @@ Each workflow is also exposed as a standalone MCP tool with matching parameters,
 
 **`id` vs `custom-action`**: Plugin-defined actions (e.g., `parse`, `delete-key`) use `id` with **named params** (`{ "key": "value" }`). Custom ACEs defined in event sheets use `custom-action` with **positional array params** (`["value"]`).
 
+> **Looking up ACE ids and param names:** use `search-docs` — e.g. `npx construct3-chef search-docs --object Sprite --query position` or `npx construct3-chef search-docs --id set-position`. Custom-addon ACEs are always covered; built-in ACEs require the genvid-c3 `build-reference` cache. See [CLI Reference — search-docs](cli.md#search-docs).
+
 **`object` / `objectClass`**: `object` names the target object class. `objectClass` (the field name used in the on-disk eventSheet JSON) is accepted as an alias. A genuinely-unknown key (e.g. a typo like `objclass`) is rejected at validate time.
 
 **System actions**: well-known object-less System actions — `wait`, `wait-for-previous-actions`, `wait-for-signal`, `signal` — auto-default `objectClass: "System"`, so `{ "id": "wait-for-previous-actions" }` works with no `object`. Any other `id` action with no `object`/`objectClass` is **rejected at validate time** (previously it silently rendered `[unknown action]`).

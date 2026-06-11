@@ -61,7 +61,7 @@ import {
 } from "../c3/navigationGraph.js";
 import { resolveNavConvention } from "../c3/navConvention.js";
 import { discoverAddons, findAddonExtractedDir } from "../c3/addonDiscovery.js";
-import { lookup } from "../c3/aceLookup.js";
+import { lookup, formatLookupResult } from "../c3/aceLookup.js";
 
 let PROJECT_ROOT = process.cwd();
 let EXTRACTED_DIR = path.join(PROJECT_ROOT, "extracted");
@@ -1120,40 +1120,7 @@ reg(
             `search-docs: object=${object ?? "-"}, id=${id ?? "-"}, param=${param ?? "-"}, query=${query ?? "-"}, aces=${aces.length}, chunks=${chunks.length}, cache=${cachePresent}`,
           );
 
-          const noCacheNote = cachePresent
-            ? ""
-            : "\n(no c3-reference cache — only custom-addon ACEs available; run the genvid-c3 build-reference skill for built-in/layout/scripting/expression coverage)";
-
-          let text: string;
-          if (aces.length === 0 && chunks.length === 0) {
-            text = `No results found.${noCacheNote}`;
-          } else {
-            const lines: string[] = [`${aces.length} ACE(s), ${chunks.length} doc chunk(s)`];
-            if (!cachePresent) {
-              lines.push(noCacheNote.trimStart());
-            }
-
-            for (const ace of aces) {
-              const paramNames = ace.params.map((p) => p.name).join(", ");
-              let line = `[${ace.source} ${ace.kind}] ${ace.objectClass}.${ace.id}(${paramNames})`;
-              if (ace.scriptName) line += ` — script:${ace.scriptName}`;
-              if (ace.description) line += ` — ${ace.description}`;
-              if (ace.canonicalUrl) line += `  [${ace.canonicalUrl}]`;
-              lines.push(line);
-            }
-
-            if (chunks.length > 0) {
-              lines.push("");
-              for (const chunk of chunks) {
-                const truncated = chunk.text.replace(/\r?\n/g, " ").slice(0, 200);
-                let line = `[${chunk.category}] ${chunk.title} — ${truncated}`;
-                if (chunk.canonicalUrl) line += `  [${chunk.canonicalUrl}]`;
-                lines.push(line);
-              }
-            }
-
-            text = lines.join("\n");
-          }
+          const text = formatLookupResult({ aces, chunks, cachePresent });
 
           return paginatedResponse(text, offset, limit, { stale: false });
         },

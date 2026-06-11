@@ -33,6 +33,7 @@ import {
   generatePlantUML,
 } from "./c3/navigationGraph.js";
 import { resolveNavConvention } from "./c3/navConvention.js";
+import { lookup, formatLookupResult } from "./c3/aceLookup.js";
 
 const GENERATOR_NAMES = ["scripts", "dsl", "layouts", "templates", "sid-registry", "global-layers"] as const;
 type GeneratorName = (typeof GENERATOR_NAMES)[number];
@@ -410,6 +411,37 @@ yargs(hideBin(process.argv))
           console.log(`\n[Truncated: showing first ${MAX_MATCHES} matches. Narrow your pattern or glob to see more.]`);
         }
       }
+    },
+  )
+  .command(
+    "search-docs",
+    "Search C3 ACE reference (action/condition/expression ids, param names) for custom addons and the built-in reference cache",
+    (y) =>
+      y
+        .option("query", { type: "string", describe: "Free-text search query" })
+        .option("object", {
+          type: "string",
+          describe: "Filter by object/plugin name (case-insensitive exact match for ACEs)",
+        })
+        .option("id", { type: "string", describe: "Filter by ACE id (exact, case-insensitive)" })
+        .option("param", { type: "string", describe: "Filter by ACE param name (substring, case-insensitive)" })
+        .option("limit", { type: "number", describe: "Max results per array (aces and chunks independently)" }),
+    async (argv) => {
+      const { query, object, id, param, limit } = argv;
+      if (!query && !object && !id && !param) {
+        console.log("Provide at least one filter: query, object, id, or param.");
+        return;
+      }
+      const rootDir = resolveProjectDir(argv);
+      const extractedDir = path.join(rootDir, await resolveExtractedDir(rootDir));
+      const result = lookup(rootDir, extractedDir, {
+        query: query || undefined,
+        object: object || undefined,
+        id: id || undefined,
+        param: param || undefined,
+        limit,
+      });
+      console.log(formatLookupResult(result));
     },
   )
   .demandCommand(1, "Please specify a subcommand. Use --help for available commands.")

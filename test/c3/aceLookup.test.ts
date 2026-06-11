@@ -3,7 +3,8 @@ import { expect } from "chai";
 import { mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { lookup } from "../../src/c3/aceLookup.js";
+import { lookup, formatLookupResult } from "../../src/c3/aceLookup.js";
+import type { LookupResult } from "../../src/c3/aceLookup.js";
 
 const ADDON_FIXTURE = path.resolve("test/fixtures/addon-sample");
 const CACHE_FIXTURE = path.resolve("test/fixtures/c3reference-sample");
@@ -292,6 +293,77 @@ describe("aceLookup", () => {
         expect(unlimited.chunks.length).to.be.greaterThan(1);
         expect(limited.aces.length).to.equal(1);
         expect(limited.chunks.length).to.equal(1);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("formatLookupResult", () => {
+    // ── Empty / no results ────────────────────────────────────────────────────
+
+    it('"No results found." when both arrays are empty and cache present', () => {
+      const result: LookupResult = { aces: [], chunks: [], cachePresent: true };
+      const text = formatLookupResult(result);
+      expect(text).to.equal("No results found.");
+    });
+
+    it('"No results found." plus no-cache note when empty and cachePresent false', () => {
+      const result: LookupResult = { aces: [], chunks: [], cachePresent: false };
+      const text = formatLookupResult(result);
+      expect(text).to.include("No results found.");
+      expect(text).to.include("no c3-reference cache");
+    });
+
+    // ── Header line ───────────────────────────────────────────────────────────
+
+    it("header line counts aces and chunks correctly", () => {
+      const result = lookup(path.resolve("test/fixtures/addon-sample"), CACHE_FIXTURE, { query: "set" });
+      expect(result.aces.length).to.be.greaterThan(0);
+      const text = formatLookupResult(result);
+      expect(text).to.match(new RegExp(`^${result.aces.length} ACE\\(s\\), ${result.chunks.length} doc chunk\\(s\\)`));
+    });
+
+    // ── ACE line format ───────────────────────────────────────────────────────
+
+    it("ACE lines use [source kind] objectClass.id(params) format", () => {
+      const result = lookup(path.resolve("test/fixtures/addon-sample"), CACHE_FIXTURE, {
+        id: "set-position",
+      });
+      expect(result.aces.length).to.equal(1);
+      const text = formatLookupResult(result);
+      // Should contain [builtin action] Sprite.set-position(x, y)
+      expect(text).to.include("[builtin action] Sprite.set-position(");
+    });
+
+    // ── No-cache note in non-empty result ─────────────────────────────────────
+
+    it("no-cache note appears in non-empty result when cachePresent false", () => {
+      // Use addon-sample as both projectRoot and extractedDir so there is no cache,
+      // but FixtureClock addon ACEs are still present.
+      const result = lookup(path.resolve("test/fixtures/addon-sample"), path.resolve("test/fixtures/addon-sample"), {
+        object: "FixtureClock",
+      });
+      expect(result.cachePresent).to.equal(false);
+      expect(result.aces.length).to.be.greaterThan(0);
+      const text = formatLookupResult(result);
+      expect(text).to.include("no c3-reference cache");
+      // Header must still be present
+      expect(text).to.match(/\d+ ACE\(s\), \d+ doc chunk\(s\)/);
+    });
+
+    // ── Chunk lines ───────────────────────────────────────────────────────────
+
+    it("chunk lines appear after a blank separator", () => {
+      const tmp = makeTmpDir();
+      try {
+        const result = lookup(tmp, CACHE_FIXTURE, { query: "expressions" });
+        expect(result.chunks.length).to.be.greaterThan(0);
+        const text = formatLookupResult(result);
+        // blank line separating ACEs from chunks
+        expect(text).to.include("\n\n");
+        // chunk format: [category] title — text
+        expect(text).to.match(/\[[^\]]+\] .+ — .+/);
       } finally {
         rmSync(tmp, { recursive: true, force: true });
       }

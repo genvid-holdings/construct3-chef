@@ -37,13 +37,14 @@ Summary of the standalone MCP security/best-practices audit (the full per-issue 
 
 **In place:**
 
-- **Path-traversal guards** (`path.relative()` + `startsWith("..")` containment) on every path-taking surface: `readExtracted`, `read-addon`, `scaffold-layout` (source + output), `scaffold-sprite`, and the `search` glob/path parameter. *Keep these when adding path-taking tools.*
+- **Path-traversal guards** (`path.relative()` + `startsWith("..")` containment) on every path-taking surface: `readExtracted`, `read-addon`, `scaffold-layout` (source + output), `scaffold-sprite`, and the `search` glob/path parameter. *Keep these when adding path-taking tools.* `search-docs` reads only `<extractedDir>/c3-reference/` (the local reference cache) and the project's own `addons/`; it never fetches anything and has no network surface.
 - **Optimistic concurrency** via `txId` (above).
 - **Input validation** — Zod schemas on every tool, with `.describe()` on every parameter.
 - **Two-tier error handling** — caught exceptions become `isError: true` content (a single block via upstream `mcpError`/`withMcpErrors`, see the response-shape bullet above); bad input surfaces as protocol errors.
 - **Tool annotations** — every tool declares `readOnlyHint`/`destructiveHint`/`idempotentHint` via the `READ_ONLY` / `REGENERATE` / `MUTATE` constants.
 - **ReDoS mitigation** on `search` — pattern length cap (500 chars) + match count cap (1000). (`re2` was deferred: a native dependency for marginal benefit against a local stdio threat model.)
 - **Lifecycle** — stdio (no network surface), startup validation (warns on missing `project.c3proj` / `extracted/`, auto-generates `extracted/` when absent), graceful SIGINT/SIGTERM shutdown, MCP `logging` capability for watcher-event diagnostics.
+- **`search-docs` has no network surface at query time.** It reads only the local `<extractedDir>/c3-reference/` cache and the project's own `addons/`. The PDF fetch + extraction that produces the cache is performed out-of-process by the genvid-c3 `build-reference` plugin skill and is never an MCP tool — so the stdio server keeps its no-network-at-query-time posture.
 
 **Known open items**: no configuration layer for which tools register / where `domain-config.json` lives ([#23](https://github.com/genvid-holdings/construct3-chef/issues/23); matters mainly for non-dev package consumers), and no cursor-based pagination on `list-event-sheets` / `list-layouts` ([#24](https://github.com/genvid-holdings/construct3-chef/issues/24); low priority at ~100 files).
 

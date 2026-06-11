@@ -189,3 +189,53 @@ export function lookup(projectRoot: string, extractedDir: string, options: Looku
 
   return { aces, chunks, cachePresent };
 }
+
+// ── Formatter ─────────────────────────────────────────────────────────────────
+
+/**
+ * Render a `LookupResult` to plain text — the body shared by the CLI and MCP
+ * `search-docs` handler. Output is the same regardless of invocation surface.
+ *
+ * Format:
+ * - Header: `<n> ACE(s), <m> doc chunk(s)`
+ * - No-cache note when `!cachePresent`
+ * - ACE lines: `[<source> <kind>] <objectClass>.<id>(<param names>)[…]`
+ * - Blank separator, then chunk lines: `[<category>] <title> — <text…200>  [url?]`
+ * - "No results found." (plus no-cache note) when both arrays are empty
+ */
+export function formatLookupResult(result: LookupResult): string {
+  const { aces, chunks, cachePresent } = result;
+
+  const noCacheNote =
+    "\n(no c3-reference cache — only custom-addon ACEs available; run the genvid-c3 build-reference skill for built-in/layout/scripting/expression coverage)";
+
+  if (aces.length === 0 && chunks.length === 0) {
+    return `No results found.${cachePresent ? "" : noCacheNote}`;
+  }
+
+  const lines: string[] = [`${aces.length} ACE(s), ${chunks.length} doc chunk(s)`];
+  if (!cachePresent) {
+    lines.push(noCacheNote.trimStart());
+  }
+
+  for (const ace of aces) {
+    const paramNames = ace.params.map((p) => p.name).join(", ");
+    let line = `[${ace.source} ${ace.kind}] ${ace.objectClass}.${ace.id}(${paramNames})`;
+    if (ace.scriptName) line += ` — script:${ace.scriptName}`;
+    if (ace.description) line += ` — ${ace.description}`;
+    if (ace.canonicalUrl) line += `  [${ace.canonicalUrl}]`;
+    lines.push(line);
+  }
+
+  if (chunks.length > 0) {
+    lines.push("");
+    for (const chunk of chunks) {
+      const truncated = chunk.text.replace(/\r?\n/g, " ").slice(0, 200);
+      let line = `[${chunk.category}] ${chunk.title} — ${truncated}`;
+      if (chunk.canonicalUrl) line += `  [${chunk.canonicalUrl}]`;
+      lines.push(line);
+    }
+  }
+
+  return lines.join("\n");
+}

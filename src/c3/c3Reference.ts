@@ -43,6 +43,11 @@ export type ReferenceIndex = z.infer<typeof ReferenceIndexSchema>;
  * Returns `{ aces, chunks }` (arrays, normalized from optional to `[]`) on
  * success, or `null` if the file is absent, unreadable, or fails validation.
  * Never throws.
+ *
+ * Invariant: the returned `aces` array never contains `source:"addon"` entries.
+ * Addon ACEs are always sourced live from the project's `addons/` directory
+ * (via `buildAddonAceRegistry`), so any cached addon entry is ignored and
+ * filtered out here at the reader boundary.
  */
 export function loadReferenceCache(extractedDir: string): { aces: AceEntry[]; chunks: ChunkEntry[] } | null {
   try {
@@ -61,7 +66,7 @@ export function loadReferenceCache(extractedDir: string): { aces: AceEntry[]; ch
     if (!result.success) return null;
 
     return {
-      aces: result.data.aces ?? [],
+      aces: (result.data.aces ?? []).filter((a) => a.source !== "addon"),
       chunks: result.data.chunks ?? [],
     };
   } catch {

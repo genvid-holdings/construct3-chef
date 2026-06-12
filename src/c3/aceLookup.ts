@@ -94,6 +94,8 @@ export function lookup(projectRoot: string, extractedDir: string, options: Looku
   const cache = loadReferenceCache(extractedDir);
   const cachePresent = cache !== null;
 
+  // cache?.aces is already addon-free (enforced in loadReferenceCache); addon ACEs come
+  // only from the live buildAddonAceRegistry call above — do NOT re-introduce addon entries here.
   const allAces: AceEntry[] = [...buildAddonAceRegistry(projectRoot), ...(cache?.aces ?? [])];
   const allChunks: ChunkEntry[] = cache?.chunks ?? [];
 

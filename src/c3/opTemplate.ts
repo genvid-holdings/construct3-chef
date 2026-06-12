@@ -283,6 +283,68 @@ function substituteStringAsText(str: string, effective: Record<string, unknown>)
   });
 }
 
+// ─── coerceArgs ───────────────────────────────────────────────────────────────
+
+/**
+ * Coerce raw CLI/file args to the declared param types for a given op.
+ *
+ * - String inputs for `number` params are converted via `Number()` — throws if
+ *   the result is NaN.
+ * - String inputs for `boolean` params accept only `"true"` / `"false"` —
+ *   throws on anything else.
+ * - `string` params are left as-is.
+ * - Values that are already the correct JS type (e.g. from a parsed JSON file)
+ *   are passed through unchanged.
+ * - Keys that do NOT match any declared param are passed through unchanged so
+ *   that `substituteOp` can reject them as unknown args.
+ */
+export function coerceArgs(def: OpDefinition, raw: Record<string, unknown>): Record<string, unknown> {
+  const paramMap = new Map<string, OpParam>(def.params.map((p) => [p.name, p]));
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(raw)) {
+    const param = paramMap.get(key);
+    if (param === undefined) {
+      // Unknown param — pass through; substituteOp will reject it.
+      result[key] = value;
+      continue;
+    }
+
+    if (param.type === "number") {
+      if (typeof value === "number") {
+        result[key] = value;
+      } else if (typeof value === "string") {
+        const n = Number(value);
+        if (Number.isNaN(n)) {
+          throw new Error(`param "${key}" expects a number but got "${value}"`);
+        }
+        result[key] = n;
+      } else {
+        result[key] = value;
+      }
+    } else if (param.type === "boolean") {
+      if (typeof value === "boolean") {
+        result[key] = value;
+      } else if (typeof value === "string") {
+        if (value === "true") {
+          result[key] = true;
+        } else if (value === "false") {
+          result[key] = false;
+        } else {
+          throw new Error(`param "${key}" expects a boolean ("true" or "false") but got "${value}"`);
+        }
+      } else {
+        result[key] = value;
+      }
+    } else {
+      // string — keep as-is
+      result[key] = value;
+    }
+  }
+
+  return result;
+}
+
 // ─── formatOpsList ─────────────────────────────────────────────────────────────
 
 /**

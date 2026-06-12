@@ -34,6 +34,7 @@ import {
 } from "./c3/navigationGraph.js";
 import { resolveNavConvention } from "./c3/navConvention.js";
 import { lookup, formatLookupResult } from "./c3/aceLookup.js";
+import { loadOpsFromDir, substituteOp, formatOpsList, coerceArgs } from "./c3/opTemplate.js";
 
 const GENERATOR_NAMES = ["scripts", "dsl", "layouts", "templates", "sid-registry", "global-layers"] as const;
 type GeneratorName = (typeof GENERATOR_NAMES)[number];
@@ -442,6 +443,93 @@ yargs(hideBin(process.argv))
         limit,
       });
       console.log(formatLookupResult(result));
+    },
+  )
+  .command(
+    "list-ops",
+    "List available user-defined ops",
+    () => {},
+    async (argv) => {
+      const rootDir = resolveProjectDir(argv);
+      const opsDir = await resolveOpsDir(rootDir);
+      const { ops, errors } = loadOpsFromDir(opsDir);
+      console.log(formatOpsList(ops, errors));
+    },
+  )
+  .command(
+    "apply-op <name>",
+    "Apply a user-defined op by name",
+    (y) =>
+      y
+        .positional("name", { type: "string", demandOption: true, describe: "Op name (e.g. add-screen)" })
+        .option("param", {
+          type: "string",
+          array: true,
+          describe: "Param as KEY=VALUE (repeatable). Overrides --params-file values.",
+        })
+        .option("params-file", {
+          type: "string",
+          describe: "Path to a JSON file containing { paramName: value } pairs (base values; --param overrides)",
+        })
+        .option("dry-run", { type: "boolean", default: false, describe: "Validate and preview without writing" })
+        .option("preview", {
+          type: "boolean",
+          default: false,
+          describe: "Show diff preview of script changes (implies --dry-run)",
+        })
+        .option("regenerate", {
+          type: "boolean",
+          default: true,
+          describe: "Regenerate extracted files after applying",
+        }),
+    async (argv) => {
+      const rootDir = resolveProjectDir(argv);
+      const opsDir = await resolveOpsDir(rootDir);
+      const { ops, errors } = loadOpsFromDir(opsDir);
+
+      const op = ops.find((o) => o.name === argv.name);
+      if (!op) {
+        const available = ops.length > 0 ? ops.map((o) => o.name).join(", ") : "(none)";
+        const errLines: string[] = [`Error: op "${argv.name}" not found. Available: ${available}`];
+        if (errors.length > 0) {
+          errLines.push("Load errors that may explain missing ops:");
+          for (const e of errors) {
+            errLines.push(`  ${e.file}: ${e.message}`);
+          }
+        }
+        console.error(errLines.join("\n"));
+        process.exitCode = 1;
+        return;
+      }
+
+      // Build raw args: start from --params-file (if given), then overlay --param entries.
+      const rawArgs: Record<string, unknown> = {};
+
+      if (argv.paramsFile) {
+        const fileContent = readFileSync(argv.paramsFile, "utf-8");
+        const parsed: unknown = JSON.parse(fileContent);
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error(`--params-file must contain a JSON object, got: ${JSON.stringify(parsed)}`);
+        }
+        Object.assign(rawArgs, parsed as Record<string, unknown>);
+      }
+
+      for (const entry of argv.param ?? []) {
+        const eqIdx = entry.indexOf("=");
+        if (eqIdx === -1) {
+          throw new Error(`--param "${entry}" is not in KEY=VALUE format`);
+        }
+        const key = entry.slice(0, eqIdx);
+        const value = entry.slice(eqIdx + 1);
+        rawArgs[key] = value;
+      }
+
+      const coerced = coerceArgs(op.def, rawArgs);
+      const recipe = substituteOp(op.def, coerced);
+
+      const extractedDir = await resolveExtractedDir(rootDir);
+      const dryRun = argv.preview ? true : argv.dryRun;
+      applyParsed(rootDir, recipe, { dryRun, preview: argv.preview, regenerate: argv.regenerate, extractedDir });
     },
   )
   .demandCommand(1, "Please specify a subcommand. Use --help for available commands.")

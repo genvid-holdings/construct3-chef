@@ -9,6 +9,7 @@ import {
   opToInputSchema,
   substituteOp,
   formatOpsList,
+  coerceArgs,
   type LoadedOp,
   type OpDefinition,
 } from "../../src/c3/opTemplate.js";
@@ -488,5 +489,84 @@ describe("formatOpsList", () => {
     };
     const output = formatOpsList([noParamsOp]);
     assert.include(output, "params: none");
+  });
+});
+
+// ─── coerceArgs ───────────────────────────────────────────────────────────────
+
+describe("coerceArgs", () => {
+  const def: OpDefinition = {
+    description: "coerce test op",
+    params: [
+      { name: "NAME", type: "string", required: true },
+      { name: "COUNT", type: "number", required: false, default: 0 },
+      { name: "ENABLED", type: "boolean", required: false, default: false },
+    ],
+  };
+
+  it("coerces a string '42' to number 42 for a number param", () => {
+    const result = coerceArgs(def, { NAME: "foo", COUNT: "42" });
+    assert.strictEqual(result["COUNT"], 42);
+    assert.strictEqual(typeof result["COUNT"], "number");
+  });
+
+  it("coerces a string 'true' to boolean true for a boolean param", () => {
+    const result = coerceArgs(def, { NAME: "foo", ENABLED: "true" });
+    assert.strictEqual(result["ENABLED"], true);
+    assert.strictEqual(typeof result["ENABLED"], "boolean");
+  });
+
+  it("coerces a string 'false' to boolean false for a boolean param", () => {
+    const result = coerceArgs(def, { NAME: "foo", ENABLED: "false" });
+    assert.strictEqual(result["ENABLED"], false);
+    assert.strictEqual(typeof result["ENABLED"], "boolean");
+  });
+
+  it("throws a clear error for a non-numeric string on a number param", () => {
+    assert.throws(
+      () => coerceArgs(def, { NAME: "foo", COUNT: "notanumber" }),
+      /param "COUNT" expects a number but got "notanumber"/,
+    );
+  });
+
+  it("throws a clear error for a non-bool string on a boolean param", () => {
+    assert.throws(
+      () => coerceArgs(def, { NAME: "foo", ENABLED: "yes" }),
+      /param "ENABLED" expects a boolean.*but got "yes"/,
+    );
+  });
+
+  it("leaves string values unchanged for string params", () => {
+    const result = coerceArgs(def, { NAME: "hello world" });
+    assert.strictEqual(result["NAME"], "hello world");
+  });
+
+  it("keeps an already-typed number from a JSON file unchanged", () => {
+    const result = coerceArgs(def, { NAME: "foo", COUNT: 7 });
+    assert.strictEqual(result["COUNT"], 7);
+    assert.strictEqual(typeof result["COUNT"], "number");
+  });
+
+  it("keeps an already-typed boolean from a JSON file unchanged", () => {
+    const result = coerceArgs(def, { NAME: "foo", ENABLED: true });
+    assert.strictEqual(result["ENABLED"], true);
+    assert.strictEqual(typeof result["ENABLED"], "boolean");
+  });
+
+  it("passes unknown keys through unchanged so substituteOp can reject them", () => {
+    const result = coerceArgs(def, { NAME: "foo", UNKNOWN: "bar" });
+    assert.strictEqual(result["UNKNOWN"], "bar");
+  });
+
+  it("handles a mix of string coercions and already-typed values", () => {
+    const result = coerceArgs(def, { NAME: "test", COUNT: "3", ENABLED: true });
+    assert.strictEqual(result["NAME"], "test");
+    assert.strictEqual(result["COUNT"], 3);
+    assert.strictEqual(result["ENABLED"], true);
+  });
+
+  it("empty input returns empty output", () => {
+    const result = coerceArgs(def, {});
+    assert.deepEqual(result, {});
   });
 });

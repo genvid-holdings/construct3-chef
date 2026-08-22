@@ -241,3 +241,13 @@ See the [wiki index](../index.md) for the other sections.
   the installed MCP SDK), and the retirement condition once upstream gains a
   configurable, recursive, enumerable docs surface
   ([#198](https://github.com/GenvidTechnologies/construct3-chef/issues/198))
+* [0030. C3 source JSON is written without a trailing newline](0030-c3-source-json-written-without-a-trailing-newline.md) -
+  All nine C3-source JSON write sites (`eventSheets/`, `layouts/`,
+  `objectTypes/`) are routed through a new shared `src/c3/sourceJson.ts`
+  `writeSourceJson`, dropping the `+ "\n"` idiom copy-pasted from the
+  project's first commit — the C3 editor writes no trailing newline, so the
+  extra byte produced a spurious whole-file diff on every editor round-trip;
+  follows the precedent ADR 0024 set for `project.c3proj`, reverses the "two
+  forms" framing in `CLAUDE.md` § "Conventions" to a single uniform rule, and
+  is proven by mutation rather than by going green
+  ([#195](https://github.com/GenvidTechnologies/construct3-chef/issues/195))

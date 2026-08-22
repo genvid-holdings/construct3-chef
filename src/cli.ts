@@ -9,6 +9,7 @@ import { openProject } from "@genvidtech/c3source";
 import { loadChefConfig, resolveOpsDir } from "./c3/chefConfig.js";
 import { GENERATORS, GENERATOR_NAMES, type GeneratorName } from "./c3/generators.js";
 import { applyParsed, renameSymbols } from "./c3/recipeApplier.js";
+import { writeSourceJson } from "./c3/sourceJson.js";
 import type { Recipe } from "./c3/recipeInterpreter.js";
 import { ALL_SECTION_KEYS, runSync, reportImageDrift, reportStrayFiles } from "./c3/projectSync.js";
 import { collectAllUids, cloneLayout } from "./c3/layoutScaffold.js";
@@ -236,7 +237,7 @@ yargs(hideBin(process.argv))
       const registryPath = path.join(rootDir, extractedDir, "sid-registry.txt");
       const existingSids = existsSync(registryPath) ? readRegistryFile(registryPath) : new Set<number>();
       const cloned = cloneLayout(source, { name: argv.name, eventSheet: argv.eventSheet, existingUids, existingSids });
-      writeFileSync(outPath, JSON.stringify(cloned, null, "\t") + "\n");
+      writeSourceJson(outPath, cloned);
       console.log(`Scaffolded ${argv.name} → ${path.relative(rootDir, outPath)}`);
       runSync(rootDir, false, console.log);
       if (!argv.noRegenerate) {
@@ -265,7 +266,7 @@ yargs(hideBin(process.argv))
         nextImageSpriteId: maxImageSpriteId + 1,
       });
       const outFile = path.join(objectTypesDir, `${argv.name}.json`);
-      writeFileSync(outFile, JSON.stringify(cloned, null, "\t") + "\n");
+      writeSourceJson(outFile, cloned);
       console.log(`Scaffolded ${argv.name} → objectTypes/${argv.name}.json`);
       const imageCopies = discoverAndPlanImageCopies(imagesDir, argv.source, argv.name);
       for (const { sourcePath, targetPath, sourceBasename, targetBasename } of imageCopies) {

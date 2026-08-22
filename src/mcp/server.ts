@@ -27,6 +27,7 @@ import {
 } from "@genvidtech/mcp-utils";
 import type { Logger } from "@genvidtech/mcp-utils";
 import { applyParsed } from "../c3/recipeApplier.js";
+import { writeSourceJson } from "../c3/sourceJson.js";
 import { validateRecipe, type Recipe } from "../c3/recipeInterpreter.js";
 import { GENERATORS, findJsonFiles, SID_SOURCE_DIRS } from "../c3/generators.js";
 import { runSync, reportImageDrift, reportStrayFiles } from "../c3/projectSync.js";
@@ -1483,7 +1484,7 @@ reg(
             // Ensure output directory exists
             const outDir = path.dirname(outFullPath);
             fs.mkdirSync(outDir, { recursive: true });
-            fs.writeFileSync(outFullPath, JSON.stringify(cloned, null, "\t") + "\n");
+            writeSourceJson(outFullPath, cloned);
             watcher.expect(outFullPath);
             await sendProgress(extra, 0, totalSteps, "Cloning layout");
             log(`Scaffolded ${name} → layouts/${outRelPath}`);
@@ -1583,7 +1584,7 @@ reg(
           await watcher.suppress(async () => {
             // Write objectType JSON
             const outFile = path.join(objectTypesDir, `${targetName}.json`);
-            fs.writeFileSync(outFile, JSON.stringify(cloned, null, "\t") + "\n");
+            writeSourceJson(outFile, cloned);
             watcher.expect(outFile);
             log(`Scaffolded ${targetName} → objectTypes/${targetName}.json`);
 

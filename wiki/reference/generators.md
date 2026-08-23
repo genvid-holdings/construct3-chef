@@ -124,6 +124,46 @@ Use the `resolve-anchor` MCP tool to look up a specific SID, line number, or nam
 
 ---
 
+## Global Layers Report Format (`global-layers.txt`)
+
+Generator 6 renders one line per global layer, after a three-line `#` header block. Read it with the `list-global-layers` MCP tool, or open the file directly.
+
+```
+# C3 Global Layers
+# Source: layouts/**/*.json
+# Global layers are shared across layouts; one layout defines instances, others override.
+
+global layer: source="Second Layout", overridingLayouts=[Main Layout], instanceCount=2
+previously local: source="Main Layout", overridingLayouts=[Second Layout], instanceCount=1
+```
+
+Each data line is `${name}: source="${sourceLayout}", overridingLayouts=[${names}], instanceCount=${n}`, and rows are sorted by layer name.
+
+> ⚠️ **`global layer` above is a layer *name*, not a literal prefix.** The canonical fixture happens to contain a layer literally named "global layer", which makes the first line read as though every row began with a fixed label. It doesn't — the second line is the shape to reason from.
+
+The report has four rendered elements beyond the data line:
+
+| Element | When |
+| ------- | ---- |
+| `# C3 Global Layers` header block | always — three `#` lines, then a blank line |
+| `(no global layers found)` | the report is empty; the file is still written, with the header |
+| `overridingLayouts=[(none)]` — the literal `(none)` *inside* the brackets, which are always emitted | the layer has no overriding layouts |
+| An indented `[WARNING: …]` line | the same layer name qualifies as a source in more than one layout |
+
+The warning is indented by **two** spaces and follows the row it belongs to:
+
+```
+global layer: source="Second Layout", overridingLayouts=[Main Layout], instanceCount=2
+  [WARNING: global layer "global layer" defined in multiple source layouts: "Second Layout", "Main Layout"]
+```
+
+Two rules govern which layers appear and what `instanceCount` means. Neither is inferable from the column names, and getting either wrong means misreading the report rather than failing to find something in it.
+
+- **`instanceCount` is counted deep, from the source layer only.** `countInstancesDeep` recurses through sublayers and sums each one's `instances`, so a layer with populated sublayers reports the whole subtree. But `buildGlobalLayerReport` applies it to the **source** layer alone — a shadowing layout's same-named layer keeps its own `instances` in the JSON, and those are *structurally excluded* from the count. That matches runtime, where the source layout's instances are the ones that exist.
+- **A global layer with zero instances never appears at all.** Source detection requires `layer.global && !isOverriden(layer) && hasInstances(layer)`. A layer failing the last clause is absent from the report entirely — it is **not** listed with `instanceCount=0`. So "not in the report" means either "not a global layer" or "a global layer nobody put anything on", and the report cannot distinguish them.
+
+---
+
 ## localVars Matching
 
 Each script block may have access to local variables from:

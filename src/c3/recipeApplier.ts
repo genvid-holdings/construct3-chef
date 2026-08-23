@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { extractScripts, generateDSL, generateLayoutSummaries } from "./generators.js";
+import { writeSourceJson } from "./sourceJson.js";
 import type { Logger } from "@genvidtech/mcp-utils";
 import { escapeRegExp } from "@genvidtech/mcp-utils";
 import type { ApplyOptions } from "./types.js";
@@ -131,7 +132,7 @@ function assertCustomActionsValid(
 
 function writeEventSheet(fullPath: string, sheet: EventSheet): void {
   assertEditorValid(fullPath, sheet);
-  writeFileSync(fullPath, JSON.stringify(sheet, null, "\t") + "\n");
+  writeSourceJson(fullPath, sheet);
 }
 
 export function regenerateExtracted(
@@ -214,7 +215,7 @@ export function createObjectType(
   }
 
   mkdirSync(path.dirname(fullPath), { recursive: true });
-  writeFileSync(fullPath, JSON.stringify(json, null, "\t") + "\n");
+  writeSourceJson(fullPath, json);
   log(`  CREATED ${relPath}`);
   return true;
 }
@@ -338,7 +339,7 @@ export function processAddInstVars(
     } else if (dryRun) {
       log(`  UPDATE ${relOtPath} (+${added.join(", ")})`);
     } else {
-      writeFileSync(objectTypeFile, JSON.stringify(objectType, null, "\t") + "\n");
+      writeSourceJson(objectTypeFile, objectType);
       log(`  UPDATED ${relOtPath} (+${added.join(", ")})`);
     }
 
@@ -355,7 +356,7 @@ export function processAddInstVars(
         if (dryRun) {
           log(`  UPDATE ${relPath} (${count} instance(s))`);
         } else {
-          writeFileSync(layoutPath, JSON.stringify(layout, null, "\t") + "\n");
+          writeSourceJson(layoutPath, layout);
           log(`  UPDATED ${relPath} (${count} instance(s))`);
         }
       }
@@ -1093,7 +1094,7 @@ export function applyRecipeInner(sidGen: SidGenerator, rootDir: string, recipe: 
       // that reaches the loop without an early return can't accidentally
       // overwrite the project.
       if (!dryRun) {
-        writeFileSync(fullPath, JSON.stringify(layout, null, "\t") + "\n");
+        writeSourceJson(fullPath, layout);
       }
     }
   }

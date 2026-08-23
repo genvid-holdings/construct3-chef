@@ -1035,4 +1035,70 @@ describe("MCP server handler response shaping", () => {
       }
     });
   });
+
+  // ── writeSourceJson wiring — no trailing newline on real write paths ──────
+  // (#195 T3). T1/T2 proved writeSourceJson itself
+  // (test/c3/sourceJson.test.ts) and wired every C3-source write site onto
+  // it. This proves the WIRING: a real mutate path (apply-recipe →
+  // objectTypes/Text.json) and real create paths (scaffold-layout,
+  // scaffold-sprite) still land bytes with no trailing newline when driven
+  // end-to-end through the MCP handlers — not just through the helper in
+  // isolation, which a stray bare `writeFileSync` reintroduced at a call
+  // site would not be caught by. Reads a Buffer and asserts on the raw last
+  // byte, since a string `.endsWith()` check can't distinguish "no trailing
+  // newline" from "file happens to not end in whitespace" as precisely.
+
+  describe("writeSourceJson wiring — no trailing newline on real write paths (#195 T3)", () => {
+    function assertNoTrailingNewline(filePath: string, expectedByte: 0x7d | 0x5d): void {
+      const buf = fs.readFileSync(filePath);
+      const last = buf[buf.length - 1];
+      expect(last, `last byte was 0x${last.toString(16)}, expected 0x${expectedByte.toString(16)}`).to.equal(
+        expectedByte,
+      );
+      expect(last, "last byte must never be a trailing newline (0x0a)").to.not.equal(0x0a);
+    }
+
+    it("mutate path: apply-recipe (addInstVars) writes objectTypes/Text.json ending in '}', no trailing newline", async () => {
+      const handler = __getHandler("apply-recipe")!;
+      expect(handler).to.exist;
+
+      __setExtractedDirty(true); // skip registry freshness scan
+      const result = (await handler({ recipe: VALID_RECIPE, txId: 5, regenerate: false }, makeExtra())) as any;
+
+      expect(result.isError, result.content?.[0]?.text).to.be.undefined;
+
+      assertNoTrailingNewline(path.join(tmp, "objectTypes", "Text.json"), 0x7d);
+    });
+
+    it("create path: scaffold-layout writes a new layout JSON ending in '}', no trailing newline", async () => {
+      const handler = __getHandler("scaffold-layout")!;
+      expect(handler).to.exist;
+
+      const result = (await handler(
+        {
+          source: "Main Layout.json",
+          name: "T3ClonedLayout",
+          path: "T3ClonedLayout.json",
+          eventSheet: "Event sheet 1",
+          regenerate: false,
+        },
+        makeExtra(),
+      )) as any;
+
+      expect(result.isError, result.content?.[0]?.text).to.be.undefined;
+
+      assertNoTrailingNewline(path.join(tmp, "layouts", "T3ClonedLayout.json"), 0x7d);
+    });
+
+    it("create path: scaffold-sprite writes a new objectType JSON ending in '}', no trailing newline", async () => {
+      const handler = __getHandler("scaffold-sprite")!;
+      expect(handler).to.exist;
+
+      const result = (await handler({ source: "Text", name: "T3ClonedSprite" }, makeExtra())) as any;
+
+      expect(result.isError, result.content?.[0]?.text).to.be.undefined;
+
+      assertNoTrailingNewline(path.join(tmp, "objectTypes", "T3ClonedSprite.json"), 0x7d);
+    });
+  });
 });

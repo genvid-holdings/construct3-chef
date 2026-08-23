@@ -120,6 +120,8 @@ When run without `--only`, all six generators run in sequence:
 5. **sid-registry** — Generate sorted global SID list → `extracted/sid-registry.txt`
 6. **global-layers** — Generate global-layer report (source + overriding layouts + instance counts) → `extracted/global-layers.txt`
 
+Generator 6's output is one line per global layer — `${name}: source="…", overridingLayouts=[…], instanceCount=N` — under a `# C3 Global Layers` header. Two rules are worth knowing before reading it: `instanceCount` is counted **deep** but from the **source** layer only, so a shadowing layout's same-named layer contributes nothing; and a global layer with **zero instances is absent from the report entirely** rather than listed with `instanceCount=0`. See [generators.md § Global Layers Report Format](./generators.md#global-layers-report-format-global-layerstxt) for the empty/`(none)`/multi-source-warning cases and the exact rendering.
+
 ---
 
 ## apply-recipe

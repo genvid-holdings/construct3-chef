@@ -134,6 +134,7 @@ Configure it in your MCP client (example for Claude Desktop or similar):
 | ---- | ----------- |
 | `list-event-sheets` | List all event sheet JSON files in the project |
 | `list-layouts` | List all layout JSON files in the project |
+| `list-global-layers` | List each global layer with its source layout, overriding layouts, and instance count |
 | `read-dsl` | Read the human-readable DSL for an event sheet |
 | `read-dsl-index` | Read the JSON-path/SID index for recipe targeting (supports grep filter) |
 | `read-event-sids` | Read SIDs directly from source JSON (useful after apply-recipe, before regenerate) |
@@ -143,12 +144,18 @@ Configure it in your MCP client (example for Claude Desktop or similar):
 | `read-sid-registry` | Read the global SID registry |
 | `list-include-tree` | Show the transitive include tree for an event sheet |
 | `search` | Regex search across extracted files (DSL, TypeScript, layout summaries, JSON) |
+| `search-docs` | Search the C3 ACE reference (action/condition/expression ids, param names) for custom addons and the built-in reference cache |
 | `resolve-anchor` | Look up a DSL coordinate by line number, SID, or name pattern |
+| `navigation-graph` | Show the layout navigation graph as a from→to→line table, or as PlantUML with `format:"plantuml"` |
 | `validate-recipe` | Validate a recipe JSON without applying it (returns txId) |
 | `validate-project` | Dry-run project.c3proj sync check |
 | `read-addon` | Read a C3 addon's metadata + ACE summary (or a raw entry, or list all addons); works on extracted and archive-only addons |
 | `validate-addons` | Validate bundled `.c3addon` packages against `project.c3proj.usedAddons` (metadata, integrity, orphan/missing/duplicate) and each addon's `aces.json`/`plugin.js` properties against its `lang/*.json` locales; optional `addon` param scopes to one addon (by id or source-tree path). Read-only |
+| `list-addons` | Unified addon inventory — one row per addon reconciling bundled `.c3addon` packages, `usedAddons` entries, and editor-only addons, with status and version |
+| `diff-addon-aces` | Diff the ACE contract between two addon versions: added/removed ACEs plus changed param signatures |
+| `scan-addon-usage` | Find where a plugin, behavior, or effect addon is used: object/family presence, event-sheet ACE call sites, and expression references; `from` reports blast radius against a prior version |
 | `preview-addon-metadata-sync` | Dry-run report of `version`/`author` drift between bundled `.c3addon` packages and `project.c3proj.usedAddons` — the read-only preview for `sync-addon-metadata`. Optional `addon` param scopes to one addon by id. Never writes |
+| `list-ops` | List user-defined ops (parameterized recipe templates) with their parameters |
 | `get-state` | Return server state: txId and extractedDirty flag |
 
 **Mutate tools** (modify source files):
@@ -159,13 +166,24 @@ Configure it in your MCP client (example for Claude Desktop or similar):
 | `sync-project` | Sync project.c3proj to match disk |
 | `scaffold-layout` | Clone a layout with new UIDs/SIDs |
 | `scaffold-sprite` | Clone a sprite objectType with new SIDs and copied images |
+| `remove-layer` | Remove a layer from a layout; strict by default, with `cascade` / `removeInstances` overrides |
+| `extract-template` | Extract an instance + its scene-graph children into a reusable master template, converting the original into a replica |
+| `templatize-in-place` | Convert an existing instance into the master template on its current layout |
+| `clone-replica-to-layouts` | Add a replica of an existing template to one or more target layouts in one call |
+| `replace-instance-with-replica` | Remove an instance and place a replica of a named template in its spot (same layer, same world props) |
 | `sync-addon-metadata` | Sync `project.c3proj.usedAddons` `version`/`author` fields against bundled `.c3addon` packages; only `direction: "manifest-from-package"` writes. Optional `addon` param scopes to one addon by id |
+
+**Non-idempotent read tool** (reads source only, but returns different output per call — do not treat as idempotent for retry or caching):
+
+| Tool | Description |
+| ---- | ----------- |
+| `generate-sids` | Mint fresh unique C3 SIDs seeded from `sid-registry.txt`; minted SIDs are **not** persisted back to the registry |
 
 **Regenerate tool**:
 
 | Tool | Description |
 | ---- | ----------- |
-| `regenerate` | Run all 5 generators and update extracted/ |
+| `regenerate` | Run all 6 generators and update extracted/ |
 
 ### Optimistic concurrency
 

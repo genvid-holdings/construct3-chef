@@ -251,3 +251,13 @@ See the [wiki index](../index.md) for the other sections.
   forms" framing in `CLAUDE.md` § "Conventions" to a single uniform rule, and
   is proven by mutation rather than by going green
   ([#195](https://github.com/GenvidTechnologies/construct3-chef/issues/195))
+* [0031. The MCP tool inventory guard spans two modules, anchored on quote style](0031-mcp-tool-inventory-guard-spans-two-modules.md) -
+  The README's `### Available MCP tools` inventory guard parses **two** source
+  modules — `src/mcp/server.ts`'s `reg()` calls and `src/mcp/opsRegistry.ts`'s
+  `registerTool()` calls — because `list-ops` is a static, unconditionally
+  registered tool that lives outside `server.ts` and a single-module parse is
+  structurally blind to it; the dynamic `op-<name>` tools are excluded by
+  anchoring on a **double-quoted** string literal rather than by an exception
+  list, since they register from a template literal
+  ([#199](https://github.com/GenvidTechnologies/construct3-chef/issues/199),
+  [#196](https://github.com/GenvidTechnologies/construct3-chef/issues/196))

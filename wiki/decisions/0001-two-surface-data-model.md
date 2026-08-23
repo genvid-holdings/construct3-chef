@@ -36,7 +36,7 @@ Two alternatives were rejected:
 
 **(a) Edit source JSON directly** — no readable target-discovery surface, fragile for AI reasoning, and mutation errors are invisible until C3 loads the file.
 
-**(b) Generate the read surface on demand only / not committed** — loses PR diff visibility that makes recipe effects reviewable in code review. The on-demand-only variant is tracked separately as [#15](https://github.com/genvid-holdings/construct3-chef/issues/15) (`extracted/` Generated On Demand) as a potential *additive* future mode, but is not the default.
+**(b) Generate the read surface on demand only / not committed** — loses PR diff visibility that makes recipe effects reviewable in code review. The on-demand-only variant is tracked separately as [#15](https://github.com/GenvidTechnologies/construct3-chef/issues/15) (`extracted/` Generated On Demand) as a potential *additive* future mode, but is not the default.
 
 ## Consequences
 

@@ -2,7 +2,7 @@
 type: decision-record
 title: "0007. MCP server root resolution and C3Project handle adoption"
 description: >-
-  MCP root resolution via mcp-utils `resolveRootFolder` (env/discovery/cwd precedence) and hybrid C3Project handle adoption; rejected alternatives and deliberate non-adoptions ([#94](https://github.com/genvid-holdings/construct3-chef/issues/94))
+  MCP root resolution via mcp-utils `resolveRootFolder` (env/discovery/cwd precedence) and hybrid C3Project handle adoption; rejected alternatives and deliberate non-adoptions ([#94](https://github.com/GenvidTechnologies/construct3-chef/issues/94))
 tags: [decision, architecture]
 status: stable
 generated: { by: process:maintain-wiki, at: 2026-08-20T15:29:10Z }
@@ -12,7 +12,7 @@ generated: { by: process:maintain-wiki, at: 2026-08-20T15:29:10Z }
 
 - **Status:** Accepted
 - **Date:** 2026-06-17
-- **Issue:** [#94](https://github.com/genvid-holdings/construct3-chef/issues/94)
+- **Issue:** [#94](https://github.com/GenvidTechnologies/construct3-chef/issues/94)
 
 ## Context
 

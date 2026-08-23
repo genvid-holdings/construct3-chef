@@ -29,7 +29,7 @@ See the [wiki index](../index.md) for the other sections.
   MCP root resolution via mcp-utils `resolveRootFolder` (env/discovery/cwd
   precedence) and hybrid C3Project handle adoption; rejected alternatives and
   deliberate non-adoptions
-  ([#94](https://github.com/genvid-holdings/construct3-chef/issues/94))
+  ([#94](https://github.com/GenvidTechnologies/construct3-chef/issues/94))
 * [0008. Addon reader: hybrid extracted-dir/archive sourcing](0008-addon-reader-hybrid-sourcing.md) -
   Shared addon reader prefers extracted dir, falls back to reading the
   `.c3addon` zip archive directly; parser-only sharing with `aceRegistry`,

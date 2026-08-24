@@ -119,7 +119,14 @@ describe("MCP docs resource — live server (#207)", function () {
   });
 
   after(async function () {
+    // Close BOTH ends. The server is a module-level singleton shared with
+    // every other test file that imports `src/mcp/server.js`, so leaving it
+    // bound to this suite's transport would outlive the suite. Closing the
+    // transport does not unregister its tools or resources — the handler
+    // table other tests reach through `__getHandler` is a separate module
+    // map — so a later file is unaffected either way.
     await client.close();
+    await __getServer().close();
   });
 
   it("a nested page is readable at its path-shaped docs:/// URI", async () => {

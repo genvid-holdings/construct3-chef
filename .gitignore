@@ -1,9 +1,11 @@
 node_modules/
 dist/
-# Flat docs/ alias, generated at pack time only from wiki/ (see gen-docs-alias.mjs)
-# so the MCP docs:/// resource has a flat surface to scan. Never tracked; see
-# wiki/decisions/0029-*. dist/ above is the existing precedent for a
-# gitignored-but-shipped directory.
+# Nothing generates docs/ any more — the pack-time alias was deleted when the
+# MCP resource moved to serving wiki/ directly (wiki/decisions/0033-*, which
+# supersedes 0029). This entry is kept deliberately, as insurance rather than
+# as machinery: CLAUDE.md carries a standing rule that docs/ must never come
+# back as a tracked documentation tier (wiki/decisions/0028-*), and one stale
+# ignore line is a cheap guard against that recurring mistake.
 /docs/
 *.tgz
 tsconfig.tsbuildinfo

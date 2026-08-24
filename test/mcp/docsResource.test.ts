@@ -12,26 +12,25 @@ import { __getServer } from "../../src/mcp/server.js";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
- * #207 (RED step). @genvidtech/mcp-utils 0.8.0 (adopted in this plan's prior
- * task) shipped `exposeDocs`' `docsDir`/`recursive` options plus a real
- * `list` callback for the `docs:///{+path}` template — the shape ADR 0029
- * named as this whole flat-alias mechanism's retirement condition. That
- * condition has now fired.
+ * #207. @genvidtech/mcp-utils 0.8.0 shipped `exposeDocs`' `docsDir`/
+ * `recursive` options plus a real `list` callback for the `docs:///{+path}`
+ * template — the shape ADR 0029 named as the flat-alias mechanism's
+ * retirement condition. `src/mcp/server.ts` opts in with
+ * `{ docsDir: "wiki", recursive: true }`, so the server serves every wiki
+ * page at its real nested path and enumerates them all.
  *
- * `src/mcp/server.ts` still calls `exposeDocs(server, __pkgDir)` 2-arg,
- * i.e. `docsDir: "docs"` (unchanged) and `recursive: false` (the default).
- * Running from source, `<repoRoot>/docs` doesn't exist (gitignored,
- * generated only at pack time), so nothing here depends on that path being
- * absent or present — the two RED assertions below are about `recursive`
- * being `false`, not about the docs alias.
+ * The two assertions in the "live server" block below were **committed red**
+ * one commit before the call site opted in, which is what establishes they
+ * are not vacuous: both assert capabilities that did not exist at all before
+ * 0.8.0, so neither could have been proven by reverting a fix. Their
+ * recorded failure modes were attributable, not incidental — the nested read
+ * raised upstream's own `!recursive && name.includes("/")` guard, and the
+ * enumeration returned exactly the static `docs:///readme`, i.e. the
+ * measured zero template-contributed resources left by `list: undefined`.
  *
- * The nested-page and resources/list assertions in the "live MCP server"
- * block below are committed RED on purpose: they exercise the *opted-in*
- * shape (`docsDir: "wiki"`, `recursive: true`) this plan's next task wires
- * at the call site, and they must fail for exactly that reason — a refused
- * nested resource, and an empty template-contributed resource list — not
- * for an import, transport, or missing-seam error. Do not make them pass in
- * this commit; that is the next task's job, once it flips the call site.
+ * Keep them paired. Either one alone is weak: a nested read could pass on a
+ * flat-but-recursive scan, and enumeration could pass while nested reads
+ * stayed broken.
  */
 describe("MCP docs resource — packaged tarball (#207)", function () {
   this.timeout(60000);
@@ -110,7 +109,7 @@ describe("MCP docs resource — packaged tarball (#207)", function () {
  * first test in this repo to connect an SDK `Client` to the server — every
  * prior handler test reaches handlers directly via `__getHandler`.
  */
-describe("MCP docs resource — live server (#207, RED until the call site opts in)", function () {
+describe("MCP docs resource — live server (#207)", function () {
   let client: Client;
 
   before(async function () {
@@ -123,14 +122,14 @@ describe("MCP docs resource — live server (#207, RED until the call site opts 
     await client.close();
   });
 
-  it("RED: a nested page is readable at its path-shaped docs:/// URI", async () => {
+  it("a nested page is readable at its path-shaped docs:/// URI", async () => {
     const result = await client.readResource({ uri: "docs:///reference/cli" });
     expect(result.contents).to.have.lengthOf(1);
     const content = result.contents[0] as { text?: string };
     expect(content.text).to.equal(readFileSync(path.join(REPO_ROOT, "wiki", "reference", "cli.md"), "utf8"));
   });
 
-  it("RED: resources/list enumerates at least one template-contributed resource", async () => {
+  it("resources/list enumerates at least one template-contributed resource", async () => {
     const result = await client.listResources();
     const templateContributed = result.resources.filter(
       (r) => r.uri.startsWith("docs:///") && r.uri !== "docs:///readme",

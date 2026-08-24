@@ -74,7 +74,7 @@ const server = new McpServer(
   { capabilities: { logging: {}, resources: {}, tools: { listChanged: true } } },
 );
 const __pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-exposeDocs(server, __pkgDir);
+exposeDocs(server, __pkgDir, { docsDir: "wiki", recursive: true });
 const rwlock = new ReadWriteLock();
 
 // ── Server State ─────────────────────────────────────────────────────────────

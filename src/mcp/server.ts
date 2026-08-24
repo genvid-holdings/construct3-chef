@@ -1935,6 +1935,9 @@ export function __getHandler(name: string): ((args: any, extra: Extra) => Promis
 export function __getToolConfig(name: string): Record<string, unknown> | undefined {
   return toolConfigs.get(name);
 }
+export function __getServer(): McpServer {
+  return server;
+}
 export function __setTestWatcher(w: OptimisticWatcher): void {
   watcher = w;
 }

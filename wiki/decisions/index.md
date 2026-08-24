@@ -29,7 +29,7 @@ See the [wiki index](../index.md) for the other sections.
   MCP root resolution via mcp-utils `resolveRootFolder` (env/discovery/cwd
   precedence) and hybrid C3Project handle adoption; rejected alternatives and
   deliberate non-adoptions
-  ([#94](https://github.com/genvid-holdings/construct3-chef/issues/94))
+  ([#94](https://github.com/GenvidTechnologies/construct3-chef/issues/94))
 * [0008. Addon reader: hybrid extracted-dir/archive sourcing](0008-addon-reader-hybrid-sourcing.md) -
   Shared addon reader prefers extracted dir, falls back to reading the
   `.c3addon` zip archive directly; parser-only sharing with `aceRegistry`,
@@ -261,3 +261,13 @@ See the [wiki index](../index.md) for the other sections.
   list, since they register from a template literal
   ([#199](https://github.com/GenvidTechnologies/construct3-chef/issues/199),
   [#196](https://github.com/GenvidTechnologies/construct3-chef/issues/196))
+* [0032. Retired-org link targets are repointed; retired-org tokens in prose are not](0032-retired-org-link-targets-are-repointed-prose-is-not.md) -
+  A GitHub link pointing through a retired org is repointed to the current org
+  wherever it appears in tracked Markdown — including inside
+  `wiki/decisions/`, which the retired-token hygiene exclusion otherwise
+  protects — because a link *target* is a pointer that must resolve, while a
+  retired token in *prose* is a historical fact that must not be rewritten.
+  Guarded locally by `test/retiredOrgLinks.test.ts` scoped to the URL form,
+  since the upstream retired-token scanner cannot see this class for two
+  independent reasons
+  ([#203](https://github.com/GenvidTechnologies/construct3-chef/issues/203))

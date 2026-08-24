@@ -176,6 +176,52 @@ upstream c3source/mcp-utils releases — record those as `Blocked by` prose nami
 the upstream release/issue when there's no local issue to link. For umbrellas, list
 dependencies as a GitHub task-list under a `Depends on` heading.
 
+### Blocked-by vs. retired-by — an upstream release can end an issue two ways
+
+An issue waiting on upstream has **two** possible resolutions, and they call for
+**opposite** actions:
+
+- **Blocked by** — upstream ships a *prerequisite*; you then **build** the thing.
+  The issue's scope survives intact.
+- **Retired by** — upstream ships *the capability itself*; you then **close** the
+  issue unbuilt and **delete** whatever local workaround stood in for it. The
+  scope evaporates and is replaced by a much smaller deletion.
+
+Reading a retired-by issue as blocked-by produces a confident, wrong plan: you
+set out to implement the very thing that just became unnecessary.
+
+**The labels cannot carry this.** `blocked` / `blocked:upstream` have no
+retired-by counterpart, so a correctly-triaged retired-by issue carries **neither
+label** — which is indistinguishable at a glance from an untriaged one. State the
+relationship in the body, under a heading a skimmer will hit, and prefer the verb
+"retire" explicitly.
+
+**Precedent — [#200](https://github.com/GenvidTechnologies/construct3-chef/issues/200).**
+It proposed owning the MCP docs resource locally (~80 LOC) to work around an
+upstream limitation, and recorded its own ending: *"What would retire this issue
+instead: mcp-utils#15 shipping … If it ships, close this and delete the
+flattener."* When that landed, the real work was a dependency bump, two options at
+one call site, and deleting a 203-line generator plus its 220-line test —
+**net −230 lines instead of +80**, and #200 closed unbuilt via
+[#207](https://github.com/GenvidTechnologies/construct3-chef/issues/207).
+
+**Triage action:** for any issue naming an upstream request, ask *if upstream
+ships this, do we build something or delete something?* and record the answer in
+the body. Grep the body for "retire", "supersede", "close this", "delete the
+workaround" before assuming blocked-by.
+
+**The corollary belongs to whoever writes the workaround, not to triage:** a
+local workaround for an upstream gap should **record its own deletion condition**
+when it is written. ADR
+[`0029`](../decisions/0029-flat-docs-alias-generated-into-the-tarball.md) did,
+which is the only reason its retirement was mechanical rather than a judgement
+call months later. See ADR
+[`0033`](../decisions/0033-mcp-docs-resource-serves-wiki-directly.md) for how it
+collected.
+
+⚠️ A **closed** upstream issue is not proof the capability shipped as needed —
+read the published `dist`, not the issue title.
+
 ## Mutation recipes
 
 The exact commands the triage skill runs to apply **approved** changes. `{id}`,

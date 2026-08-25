@@ -26,36 +26,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-25
+
+### Changed
+
+- **Consumer-visible rename on the MCP `docs:///` resource.** `exposeDocs` is now
+  pointed straight at the `wiki/` tier and walks it recursively, so every document
+  surfaces under its **real path relative to `wiki/`** rather than a bare stem —
+  `docs:///cli` becomes `docs:///reference/cli`, and `1.1.0`'s `docs:///TOC`
+  becomes `docs:///index` (which now returns `wiki/index.md`, the wiki's own table
+  of contents). The served set is a **rule, not a number**: every tracked `*.md`
+  under `wiki/`, at its real relative path. Two consequences beyond the rename —
+  the set is now enumerable through `resources/list` (upstream registers a real
+  `list` callback backing a `docs:///{+path}` RFC 6570 reserved-expansion
+  template), and pages the retired local generator filtered out as `RESERVED`
+  (`index.md`/`log.md` at any level) are now readable. **Anything addressing a
+  `docs:///` name from `1.1.0` must be repointed.**
+  ([#207](https://github.com/GenvidTechnologies/construct3-chef/issues/207),
+  closes [#200](https://github.com/GenvidTechnologies/construct3-chef/issues/200),
+  ADR [`0033`](wiki/decisions/0033-mcp-docs-resource-serves-wiki-directly.md))
+
+  > The resolvable form is `@construct3-chef:docs://<path>`
+  > (`@server:protocol://resource`). A bare `construct3-chef://docs` transposes
+  > server and protocol and has never resolved, independently of this change.
+
+- Bumped `@genvidtech/mcp-utils` to `^0.8.0`, adopting the `docsDir`, `recursive`,
+  and enumerable-`list` capabilities behind the change above
+  ([mcp-utils#15](https://github.com/GenvidTechnologies/mcp-utils/issues/15)).
+  This was the explicit retirement condition ADR
+  [`0029`](wiki/decisions/0029-flat-docs-alias-generated-into-the-tarball.md)
+  named for itself; that ADR is now **superseded**, and the machinery it
+  introduced — `scripts/gen-docs-alias.mjs`, its test, the `docs:alias` npm
+  script, and the `prepack`/`postpack` steps — is deleted. The docs resource is
+  no longer pack-time-only: it serves identically from a source checkout and an
+  installed package. ([#208](https://github.com/GenvidTechnologies/construct3-chef/pull/208))
+
+- **Packaging:** `package.json`'s `files` now ships `wiki` and `raw` in place of
+  `docs`. The `docs/` documentation tier was consolidated into `wiki/` and
+  retired; `wiki/` is this repo's only documentation tier.
+  ([#194](https://github.com/GenvidTechnologies/construct3-chef/pull/194),
+  [#197](https://github.com/GenvidTechnologies/construct3-chef/pull/197), ADR
+  [`0028`](wiki/decisions/0028-documentation-consolidated-into-the-wiki-tier.md))
+
 ### Fixed
 
-- The MCP `docs:///{name}` resource served **zero** documents and threw `ENOENT`
-  on every read, from the `docs/` → `wiki/` consolidation
-  ([#197](https://github.com/GenvidTechnologies/construct3-chef/issues/197), ADR
-  [`0028`](wiki/decisions/0028-documentation-consolidated-into-the-wiki-tier.md))
-  until now. `exposeDocs` (upstream `@genvidtech/mcp-utils`) resolves a
-  **hardcoded, flat, non-recursive** `<packageDir>/docs`, so retiring that
-  directory silently emptied the resource; `docs` was dropped from
-  `package.json`'s `files` in the same commit, so the published tarball lost it
-  too. The regression never reached a release — `1.1.0` predates both
-  consolidation commits — but the next tag would have shipped it, and the
-  `gvt-construct3` plugin pins an exact version.
+- **C3 source JSON is written with no trailing newline**, matching what the C3
+  editor itself writes — every file in the pinned canonical fixture ends at its
+  closing `}`/`]`. Applies to all `eventSheets/`, `layouts/`, and `objectTypes/`
+  writes on **both** surfaces, which now route through a single shared
+  `writeSourceJson` helper instead of re-deriving the form at each call site.
+  `project.c3proj` is unaffected — it already emitted no trailing newline through
+  c3source's `writeProjectManifest`. This **reverses** the previously documented
+  two-form rule under which event-sheet and layout writes appended a newline, so a
+  project re-synced with this version will show a one-byte diff on each rewritten
+  source file. `extracted/` is unchanged and keeps its trailing newline — it is
+  chef's own read surface, not C3 source.
+  ([#195](https://github.com/GenvidTechnologies/construct3-chef/issues/195), ADR
+  [`0030`](wiki/decisions/0030-c3-source-json-written-without-a-trailing-newline.md))
 
-  A new `scripts/gen-docs-alias.mjs` now generates a flat `docs/` from `wiki/`
-  **into the published tarball only**, wired through `prepack`/`postpack` and
-  gitignored, exactly as `dist/` already works. `exposeDocs` itself is untouched.
-  40 pages are served, addressed as `docs:///<name>`, plus a generated
-  `docs:///index` manifest; nine of the ten names served at `1.1.0` return with
-  identical stems, and the tenth (`TOC`) is deliberately renamed to `index`,
-  following ADR 0028's fold. Pages are copied verbatim, so a served document is
-  byte-identical to its `wiki/` source. See ADR
-  [`0029`](wiki/decisions/0029-flat-docs-alias-generated-into-the-tarball.md).
+- The MCP `docs:///` resource served **zero** documents and threw `ENOENT` on
+  every read between the `docs/` → `wiki/` consolidation and the adoption above.
+  `exposeDocs` resolved a hardcoded, flat, non-recursive `<packageDir>/docs`, so
+  retiring that directory silently emptied the resource. **The regression never
+  reached a release** — `1.1.0` predates the consolidation — and was closed
+  first by a pack-time alias generator and then, definitively, by the upstream
+  adoption above; a consumer upgrading from `1.1.0` sees only the rename recorded
+  under **Changed**, never the gap.
   ([#198](https://github.com/GenvidTechnologies/construct3-chef/issues/198))
 
-  > Note for consumers referencing these docs: the resolvable form is
-  > `@construct3-chef:docs://<name>` (`@server:protocol://resource`). A bare
-  > `construct3-chef://docs` transposes server and protocol and has never
-  > resolved, independently of this fix.
+### Documentation
 
+- Repointed every intra-repo link that resolved through the retired
+  `genvid-holdings` GitHub organization to its canonical `GenvidTechnologies`
+  target, and added `test/retiredOrgLinks.test.ts` to guard the class against
+  recurrence. Matching is on the **URL form** rather than the bare token, so
+  "formerly …" provenance prose stays intact and needs no exclusion — a pointer
+  exists to resolve, whereas rewriting the prose would make the sentence false.
+  ([#203](https://github.com/GenvidTechnologies/construct3-chef/issues/203), ADR
+  [`0032`](wiki/decisions/0032-retired-org-link-targets-are-repointed-prose-is-not.md))
+
+- Documented the `list-global-layers` MCP tool and the `global-layers.txt` report
+  format in `wiki/reference/generators.md`, and extended the README inventory
+  guard (`test/readmeCommandInventory.test.ts`) to cover the MCP tool tables. The
+  generator count in the README's `regenerate` row is now **derived** from
+  `GENERATORS.length` rather than restated by hand — it had silently drifted to
+  five against six.
+  ([#196](https://github.com/GenvidTechnologies/construct3-chef/issues/196),
+  [#199](https://github.com/GenvidTechnologies/construct3-chef/issues/199), ADR
+  [`0031`](wiki/decisions/0031-mcp-tool-inventory-guard-spans-two-modules.md))
 ## [1.1.0] - 2026-08-16
 
 ### Added
@@ -456,7 +514,8 @@ Initial public release, extracted from the retired c3-mcp-server initiative.
 - `read-event-sids` matches condition and action content. ([#8](https://github.com/GenvidTechnologies/construct3-chef/issues/8))
 - The DSL extractor marks disabled conditions with `[DISABLED]`. ([#5](https://github.com/GenvidTechnologies/construct3-chef/issues/5))
 
-[Unreleased]: https://github.com/GenvidTechnologies/construct3-chef/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/GenvidTechnologies/construct3-chef/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/GenvidTechnologies/construct3-chef/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/GenvidTechnologies/construct3-chef/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/GenvidTechnologies/construct3-chef/compare/v0.11.2...v1.0.0
 [0.11.2]: https://github.com/GenvidTechnologies/construct3-chef/compare/v0.11.1...v0.11.2

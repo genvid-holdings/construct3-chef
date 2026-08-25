@@ -43,7 +43,6 @@
 	},
 	"files": [
 		"dist",
-		"docs",
 		"wiki",
 		"raw",
 		"CHANGELOG.md",
@@ -54,8 +53,7 @@
 		"access": "public"
 	},
 	"scripts": {
-		"prepack": "npm run build && npm run docs:alias",
-		"postpack": "node scripts/gen-docs-alias.mjs --clean",
+		"prepack": "npm run build",
 		"pretest": "npm run fixture:prep",
 		"pretest:file": "npm run fixture:prep",
 		"build": "tsc && node -e \"const fs=require('fs');const f='dist/cli.js';const c=fs.readFileSync(f,'utf8');if(!c.startsWith('#!')){fs.writeFileSync(f,'#!/usr/bin/env node\\n'+c)}\"",
@@ -68,15 +66,14 @@
 		"fixture:prep": "node scripts/prep-fixture.mjs",
 		"fixture:verify": "node scripts/verify-fixture-parity.mjs",
 		"wiki:index": "node scripts/gen-wiki-index.mjs",
-		"wiki:lint": "node scripts/wiki-lint.mjs",
-		"docs:alias": "node scripts/gen-docs-alias.mjs"
+		"wiki:lint": "node scripts/wiki-lint.mjs"
 	},
 	"engines": {
 		"node": ">=22"
 	},
 	"dependencies": {
 		"@genvidtech/c3source": "^2.0.0",
-		"@genvidtech/mcp-utils": "^0.7.0",
+		"@genvidtech/mcp-utils": "^0.8.0",
 		"@modelcontextprotocol/sdk": "^1.27.1",
 		"fflate": "^0.8.3",
 		"yargs": "^17.7.2",

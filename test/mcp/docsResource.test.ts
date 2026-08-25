@@ -1,39 +1,38 @@
 import { describe, it, before, after } from "mocha";
 import { expect } from "chai";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { __getServer } from "../../src/mcp/server.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
- * #198 (RED step, plan task P2). `exposeDocs` (upstream @genvidtech/mcp-utils)
- * hardcodes a flat, non-recursive scan of `<packageDir>/docs`, and `docs/`
- * was retired into `wiki/` by ADR 0028 — so the MCP `docs:///{name}`
- * resource has served nothing since that consolidation.
- * `scripts/gen-docs-alias.mjs` (committed in the prior task) can regenerate
- * a flat `docs/` alias from `wiki/`, but nothing wires it into packaging
- * yet: `package.json`'s `files`/`prepack`/`postpack` are untouched until a
- * later task in this plan. So this suite is committed RED on purpose — the
- * committed red state is the proof artifact that packaging was genuinely
- * broken before that wiring commit, rather than a claim made after the fact.
+ * #207. @genvidtech/mcp-utils 0.8.0 shipped `exposeDocs`' `docsDir`/
+ * `recursive` options plus a real `list` callback for the `docs:///{+path}`
+ * template — the shape ADR 0029 named as the flat-alias mechanism's
+ * retirement condition. `src/mcp/server.ts` opts in with
+ * `{ docsDir: "wiki", recursive: true }`, so the server serves every wiki
+ * page at its real nested path and enumerates them all.
  *
- * Do not make this file pass here. It flips green only once `files` gains
- * `"docs"` and `prepack` runs `docs:alias`.
+ * The two assertions in the "live server" block below were **committed red**
+ * one commit before the call site opted in, which is what establishes they
+ * are not vacuous: both assert capabilities that did not exist at all before
+ * 0.8.0, so neither could have been proven by reverting a fix. Their
+ * recorded failure modes were attributable, not incidental — the nested read
+ * raised upstream's own `!recursive && name.includes("/")` guard, and the
+ * enumeration returned exactly the static `docs:///readme`, i.e. the
+ * measured zero template-contributed resources left by `list: undefined`.
  *
- * Every content assertion below reads from a REAL, freshly built `npm pack`
- * tarball, extracted to a temp dir — never from the repo's working tree.
- * This matters because `docs/` is git-ignored and generated only at pack
- * time (see .gitignore): if a stray `docs/` were ever left on disk by a
- * manual `npm run docs:alias` run, a test that read the working tree
- * directly would pass BY ACCIDENT, proving nothing about packaging. The
- * "guard" test below defends the other half of that trap — it fails loudly,
- * rather than silently validating nothing, if the working tree is dirty in
- * exactly that way when the suite starts.
+ * Keep them paired. Either one alone is weak: a nested read could pass on a
+ * flat-but-recursive scan, and enumeration could pass while nested reads
+ * stayed broken.
  */
-describe("MCP docs resource — packaged tarball (#198)", function () {
+describe("MCP docs resource — packaged tarball (#207)", function () {
   this.timeout(60000);
 
   let packDir: string;
@@ -75,53 +74,21 @@ describe("MCP docs resource — packaged tarball (#198)", function () {
     if (extractDir) rmSync(extractDir, { recursive: true, force: true });
   });
 
-  it("guard: the repo's own working tree has no docs/ dir (accidental-pass trap)", () => {
-    expect(
-      existsSync(path.join(REPO_ROOT, "docs")),
-      "docs/ is git-ignored and generated only at pack time (see .gitignore); a stray one left by a " +
-        "manual `npm run docs:alias` would let a disk-read assertion pass by accident instead of " +
-        "genuinely exercising the packaged tarball",
-    ).to.equal(false);
-  });
-
-  it("T3: packaged docs/recipe-reference.md byte-equals wiki/reference/recipe-reference.md", () => {
-    const packagedPath = path.join(pkgRoot, "docs", "recipe-reference.md");
-    expect(existsSync(packagedPath), `${packagedPath} should exist in the packaged tarball`).to.equal(true);
+  it("survival: packaged wiki/reference/cli.md byte-equals wiki/reference/cli.md", () => {
+    const packagedPath = path.join(pkgRoot, "wiki", "reference", "cli.md");
     const packaged = readFileSync(packagedPath);
-    const source = readFileSync(path.join(REPO_ROOT, "wiki", "reference", "recipe-reference.md"));
+    const source = readFileSync(path.join(REPO_ROOT, "wiki", "reference", "cli.md"));
     expect(packaged.equals(source)).to.equal(true);
-  });
-
-  it("T3: packaged docs/ops.md byte-equals wiki/reference/ops.md", () => {
-    const packagedPath = path.join(pkgRoot, "docs", "ops.md");
-    expect(existsSync(packagedPath), `${packagedPath} should exist in the packaged tarball`).to.equal(true);
-    const packaged = readFileSync(packagedPath);
-    const source = readFileSync(path.join(REPO_ROOT, "wiki", "reference", "ops.md"));
-    expect(packaged.equals(source)).to.equal(true);
-  });
-
-  it("T1: packaged docs/ has recipe-reference.md, ops.md, and cli.md", () => {
-    const docsDir = path.join(pkgRoot, "docs");
-    for (const name of ["recipe-reference.md", "ops.md", "cli.md"]) {
-      expect(existsSync(path.join(docsDir, name)), `docs/${name} should exist in the packaged tarball`).to.equal(true);
-    }
-  });
-
-  it("T2: packaged docs/ has at least 40 top-level *.md entries", () => {
-    const docsDir = path.join(pkgRoot, "docs");
-    const mdFiles = existsSync(docsDir) ? readdirSync(docsDir).filter((f) => f.endsWith(".md")) : [];
-    expect(mdFiles.length).to.be.at.least(40);
   });
 
   // --- T10: survival assertions -------------------------------------------
-  // Both already pass today, before any of this plan's packaging fix. They
-  // are evidence of nothing on their own — they exist only to be paired
-  // with the T1/T2/T3 assertions above, so a future regression that breaks
-  // README packaging or double-registers exposeDocs is caught by the same
-  // suite rather than assumed to still hold.
+  // Both already pass today. They are evidence of nothing on their own —
+  // they exist only to be paired with future assertions in this suite, so a
+  // regression that breaks README packaging or double-registers exposeDocs
+  // is caught by the same suite rather than assumed to still hold.
 
   it("T10 (survival): README.md is present at the package root", () => {
-    expect(existsSync(path.join(pkgRoot, "README.md"))).to.equal(true);
+    expect(readdirSync(pkgRoot)).to.include("README.md");
   });
 
   it("T10 (survival): src/mcp/server.ts calls exposeDocs( exactly once", () => {
@@ -132,5 +99,51 @@ describe("MCP docs resource — packaged tarball (#198)", function () {
     const serverSrc = readFileSync(path.join(REPO_ROOT, "src", "mcp", "server.ts"), "utf8");
     const callSites = serverSrc.match(/exposeDocs\(/g) ?? [];
     expect(callSites).to.have.lengthOf(1);
+  });
+});
+
+/**
+ * Drives the live MCP server (not a packed tarball) over an in-memory
+ * transport pair, so these assertions exercise the actual `exposeDocs` call
+ * site in `src/mcp/server.ts` rather than a packaging artifact. This is the
+ * first test in this repo to connect an SDK `Client` to the server — every
+ * prior handler test reaches handlers directly via `__getHandler`.
+ */
+describe("MCP docs resource — live server (#207)", function () {
+  let client: Client;
+
+  before(async function () {
+    client = new Client({ name: "docsResource-test-client", version: "0.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(clientTransport), __getServer().connect(serverTransport)]);
+  });
+
+  after(async function () {
+    // Close BOTH ends. The server is a module-level singleton shared with
+    // every other test file that imports `src/mcp/server.js`, so leaving it
+    // bound to this suite's transport would outlive the suite. Closing the
+    // transport does not unregister its tools or resources — the handler
+    // table other tests reach through `__getHandler` is a separate module
+    // map — so a later file is unaffected either way.
+    await client.close();
+    await __getServer().close();
+  });
+
+  it("a nested page is readable at its path-shaped docs:/// URI", async () => {
+    const result = await client.readResource({ uri: "docs:///reference/cli" });
+    expect(result.contents).to.have.lengthOf(1);
+    const content = result.contents[0] as { text?: string };
+    expect(content.text).to.equal(readFileSync(path.join(REPO_ROOT, "wiki", "reference", "cli.md"), "utf8"));
+  });
+
+  it("resources/list enumerates at least one template-contributed resource", async () => {
+    const result = await client.listResources();
+    const templateContributed = result.resources.filter(
+      (r) => r.uri.startsWith("docs:///") && r.uri !== "docs:///readme",
+    );
+    expect(
+      templateContributed.length,
+      `expected at least one template-contributed docs:/// resource, got: ${JSON.stringify(result.resources)}`,
+    ).to.be.at.least(1);
   });
 });

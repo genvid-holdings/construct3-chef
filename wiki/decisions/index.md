@@ -271,3 +271,13 @@ See the [wiki index](../index.md) for the other sections.
   since the upstream retired-token scanner cannot see this class for two
   independent reasons
   ([#203](https://github.com/GenvidTechnologies/construct3-chef/issues/203))
+* [0033. The MCP docs resource serves wiki/ directly; the pack-time alias is retired](0033-mcp-docs-resource-serves-wiki-directly.md) -
+  `@genvidtech/mcp-utils` 0.8.0 shipped the configurable-directory,
+  recursive-scan, and enumerable-`list` capabilities ADR 0029 named as its
+  retirement condition
+  ([mcp-utils#15](https://github.com/GenvidTechnologies/mcp-utils/issues/15)).
+  Chef adopted them by pointing `exposeDocs` straight at `wiki/` and deleting
+  `scripts/gen-docs-alias.mjs`, its test, and the `prepack`/`postpack`
+  generation step — the docs resource is no longer pack-time-only, no longer
+  flattened by a local generator, and its names are now path-shaped
+  ([#207](https://github.com/GenvidTechnologies/construct3-chef/issues/207))

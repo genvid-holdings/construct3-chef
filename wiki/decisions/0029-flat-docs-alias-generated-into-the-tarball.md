@@ -15,15 +15,24 @@ description: >-
   the retirement condition once upstream gains a configurable, recursive,
   enumerable docs surface ([#198](https://github.com/GenvidTechnologies/construct3-chef/issues/198))
 tags: [decision, architecture]
-status: stable
+status: superseded
 generated: { by: process:maintain-wiki, at: 2026-08-22T16:00:00Z }
 ---
 
 # 0029. Flat docs/ alias generated into the published tarball, not committed
 
-- **Status:** Accepted
+- **Status:** Accepted, superseded by [0033](0033-mcp-docs-resource-serves-wiki-directly.md)
 - **Date:** 2026-08-22
 - **Issue:** [#198](https://github.com/GenvidTechnologies/construct3-chef/issues/198)
+
+> **Superseded 2026-08-24.** The retirement condition this record names below
+> — a configurable docs directory, a recursive scan, and a non-`undefined`
+> `list` callback — shipped as [mcp-utils#15](https://github.com/GenvidTechnologies/mcp-utils/issues/15)
+> in `@genvidtech/mcp-utils` 0.8.0. Chef adopted it and deleted
+> `scripts/gen-docs-alias.mjs` and the pack-time mechanism this record
+> describes. See [0033](0033-mcp-docs-resource-serves-wiki-directly.md) for
+> the adoption. The rest of this record is kept unchanged as a historical
+> account of a decision that was correct for its moment.
 
 ## Context
 

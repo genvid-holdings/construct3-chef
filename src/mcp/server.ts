@@ -74,7 +74,7 @@ const server = new McpServer(
   { capabilities: { logging: {}, resources: {}, tools: { listChanged: true } } },
 );
 const __pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-exposeDocs(server, __pkgDir);
+exposeDocs(server, __pkgDir, { docsDir: "wiki", recursive: true });
 const rwlock = new ReadWriteLock();
 
 // ── Server State ─────────────────────────────────────────────────────────────
@@ -1934,6 +1934,9 @@ export function __getHandler(name: string): ((args: any, extra: Extra) => Promis
 }
 export function __getToolConfig(name: string): Record<string, unknown> | undefined {
   return toolConfigs.get(name);
+}
+export function __getServer(): McpServer {
+  return server;
 }
 export function __setTestWatcher(w: OptimisticWatcher): void {
   watcher = w;

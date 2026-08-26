@@ -20,8 +20,6 @@ import {
   REGENERATE,
   MUTATE,
   NON_IDEMPOTENT_READ,
-  resolveRootFolder,
-  isMcpError,
 } from "@genvidtech/mcp-utils";
 import type { Logger } from "@genvidtech/mcp-utils";
 import { applyParsed } from "../c3/recipeApplier.js";
@@ -63,6 +61,8 @@ import { syncAddonMetadata, formatAddonMetadataSync } from "../c3/addonMetadataS
 import { lookup, formatLookupResult } from "../c3/aceLookup.js";
 import { OpsRegistry } from "./opsRegistry.js";
 import { ProjectContext, createProjectContext } from "./projectContext.js";
+import { ProjectRegistry } from "./projectRegistry.js";
+import { buildProjectRegistry } from "./launchConfig.js";
 
 // Default single-project id and chef config, used only to seed the
 // module-level context synchronously at import time — before startServer
@@ -94,6 +94,17 @@ exposeDocs(server, __pkgDir, { docsDir: "wiki", recursive: true });
 // same two-step shape setupWatchers used before this context existed.
 let ctx: ProjectContext = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
 
+// The launch-fixed set of registered projects (#95 F2/F3). Always contains at
+// least `ctx` as its default — kept in lockstep with every wholesale `ctx`
+// reassignment below (startServer and the __setProjectRoot/__setExtractedDir/
+// __resetTestState test seams) so `list-projects` never reports a registry
+// that disagrees with the context every other tool actually reads. Multi-root
+// launches populate more than the one default entry; only the default is
+// reachable by any tool but `list-projects` until a later task threads a
+// per-call `project` selector (see ADR wiki/decisions/0034).
+let REGISTRY: ProjectRegistry = new ProjectRegistry();
+REGISTRY.add(ctx);
+
 // Tool annotation presets (READ_ONLY / REGENERATE / MUTATE / NON_IDEMPOTENT_READ)
 // are imported from @genvidtech/mcp-utils. NON_IDEMPOTENT_READ marks tools that read
 // source only but return different output per call (e.g. random-SID minting) —
@@ -102,12 +113,6 @@ let ctx: ProjectContext = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
-
-/** Extract the error message text from a CallToolResult returned by resolveRootFolder. */
-function mcpErrorText(r: CallToolResult): string {
-  const block = r.content[0];
-  return block && block.type === "text" ? (block as { type: "text"; text: string }).text : String(r);
-}
 
 // ── Handler registry (also enables direct handler invocation in tests) ─────────
 const handlers = new Map<string, (args: any, extra: Extra) => Promise<unknown>>();
@@ -1943,6 +1948,29 @@ reg(
     }),
 );
 
+// ── Project Registry Tool ────────────────────────────────────────────────────
+// Reads REGISTRY's static per-project metadata (id/root/extractedDir, all
+// getter-only since construction — see ProjectContext's own docstring), so
+// unlike every other tool here it needs no ctx.rwlock.read: there is no
+// mutable shared state to serialize against.
+
+reg(
+  "list-projects",
+  {
+    title: "List Registered Projects",
+    description:
+      "List every project registered at server launch (via repeated --project-dir, C3_PROJECT_DIRS, or the single-root C3_PROJECT_DIR/discovery/cwd path), each with its id, root, extractedDir, and whether it is the default. Every OTHER tool still targets the default project only (#95 F2/F3) — this tool exists to make a multi-root launch inspectable ahead of a later per-call project selector.",
+    annotations: READ_ONLY,
+    inputSchema: {},
+  },
+  async () => {
+    const text = REGISTRY.list()
+      .map((p) => `${p.id}${p.isDefault ? " (default)" : ""}\n  root: ${p.root}\n  extractedDir: ${p.extractedDir}`)
+      .join("\n\n");
+    return { content: [{ type: "text", text }] };
+  },
+);
+
 // ── Test-only seam ─────────────────────────────────────────────────────────────
 // Exposed for handler-level tests (test/mcp/serverHandlers.test.ts). server.ts is
 // not on the src/index.ts barrel, so these stay internal. Do NOT import from production code.
@@ -1986,6 +2014,7 @@ export function __setProjectRoot(dir: string): void {
   ctx = new ProjectContext(ctx.id, dir, DEFAULT_CHEF_CONFIG);
   ctx.watcher = prevWatcher;
   ctx.ops = prevOps;
+  reseedRegistry();
 }
 export function __setExtractedDir(dir: string): void {
   // Same whole-context reassignment (and the same watcher/ops carry-forward)
@@ -1998,36 +2027,42 @@ export function __setExtractedDir(dir: string): void {
   ctx = new ProjectContext(ctx.id, ctx.root, { ...ctx.config, extractedDir: path.relative(ctx.root, dir) });
   ctx.watcher = prevWatcher;
   ctx.ops = prevOps;
+  reseedRegistry();
 }
 export function __resetTestState(): void {
   ctx = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
+  reseedRegistry();
+}
+// Rebuild REGISTRY as the single-entry { ctx.id: ctx } registry — keeps
+// list-projects consistent with whatever the test seams above just pointed
+// `ctx` at. Not used by startServer, which builds a real (possibly
+// multi-entry) registry from the launch surface instead (see below).
+function reseedRegistry(): void {
+  REGISTRY = new ProjectRegistry();
+  REGISTRY.add(ctx);
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-export async function startServer(projectDir?: string, overrides?: Partial<ChefConfig>): Promise<void> {
-  const resolved = resolveRootFolder({
-    explicit: projectDir,
-    envVar: "C3_PROJECT_DIR",
-    marker: "project.c3proj",
-    searchDepth: 1,
+export async function startServer(
+  projectDirs?: string[],
+  overrides?: Partial<ChefConfig>,
+  defaultProject?: string,
+): Promise<void> {
+  // Launch surface precedence (#95 F3): repeated `--project-dir` >
+  // `C3_PROJECT_DIRS` > (fall through to the untouched `C3_PROJECT_DIR` /
+  // discovery / cwd path, preserved byte-for-byte by resolveLaunchRoots for
+  // 0-or-1 resolved specs — see that function's own docstring).
+  REGISTRY = await buildProjectRegistry(projectDirs, overrides, defaultProject, {
+    log: (msg) => console.error(msg),
   });
-  let rootDir: string;
-  if (isMcpError(resolved)) {
-    console.error(`[construct3-chef] Root resolution: ${mcpErrorText(resolved)} — falling back to cwd`);
-    rootDir = process.cwd();
-  } else {
-    rootDir = resolved.path;
-    if (resolved.source === "cwd") {
-      console.error(
-        `[construct3-chef] Warning: no project.c3proj found via --project-dir, $C3_PROJECT_DIR, or discovery — using cwd ${rootDir}`,
-      );
-    }
-  }
-  console.error(
-    `[construct3-chef] Root: ${rootDir} (source: ${isMcpError(resolved) ? "cwd-fallback" : resolved.source})`,
-  );
-  ctx = await createProjectContext(DEFAULT_PROJECT_ID, rootDir, overrides);
+  // Every tool but list-projects still reads the sole module-level `ctx` —
+  // multi-root is DECLARABLE via the registry above but only the default
+  // project is REACHABLE until a later task threads a per-call `project`
+  // selector (see ADR wiki/decisions/0034). A non-default registered project
+  // therefore gets no startup validation/auto-generation/watcher/ops below —
+  // it's a registry entry, not yet a live one.
+  ctx = REGISTRY.get(REGISTRY.defaultId)!;
 
   // Startup validation — warn but don't hard-fail
   const c3projPath = path.join(ctx.root, "project.c3proj");

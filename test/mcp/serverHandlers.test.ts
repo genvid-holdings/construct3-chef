@@ -153,6 +153,23 @@ describe("MCP server handler response shaping", () => {
     expect(result.content[0].text).to.equal("txId: 5\nextractedDirty: false");
   });
 
+  // ── 1b. list-projects: reflects the single-entry registry __setProjectRoot
+  //       reseeds (#95 F2) ──────────────────────────────────────────────────
+
+  it("list-projects reports the sole registered project as default", async () => {
+    const handler = __getHandler("list-projects")!;
+    expect(handler).to.exist;
+
+    const result = (await handler({}, makeExtra())) as any;
+
+    expect(result.isError).to.be.undefined;
+    expect(result.content).to.have.length(1);
+    const text = result.content[0].text as string;
+    expect(text).to.match(/^default \(default\)/);
+    expect(text).to.include(`root: ${tmp}`);
+    expect(text).to.include(`extractedDir: ${path.join(tmp, "extracted")}`);
+  });
+
   // ── 2. stale-warning appended when extractedDirty is true ────────────────
   // Uses read-dsl which routes through paginatedResponse → appendStaleWarning.
   // The fixture has extracted/eventSheets/Event sheet 1.dsl.txt.

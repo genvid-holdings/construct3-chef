@@ -98,6 +98,20 @@ export class ProjectRegistry {
  *  happens to contain `=` somewhere past its first separator. */
 const EXPLICIT_ID_RE = /^([^/\\=]+)=(.+)$/;
 
+/**
+ * Split a raw `--project-dir`/`C3_PROJECT_DIRS` spec into its optional
+ * explicit id and path portion, per {@link EXPLICIT_ID_RE}. `id` is
+ * `undefined` for a bare path. The launch-config parser (`launchConfig.ts`,
+ * #95 F3) uses this to recover the actual root path for a spec whose id it
+ * has already derived via {@link deriveProjectId} — the two stay in the same
+ * module so the spec grammar can't drift between id extraction and path
+ * extraction.
+ */
+export function splitSpec(spec: string): { id: string | undefined; root: string } {
+  const explicit = EXPLICIT_ID_RE.exec(spec);
+  return explicit ? { id: explicit[1], root: explicit[2] } : { id: undefined, root: spec };
+}
+
 /** Collapse anything outside `[a-z0-9-]` to `-`, then collapse runs of `-` to
  *  one and trim leading/trailing `-`. Falls back to `"project"` if that
  *  leaves nothing. */
@@ -136,10 +150,10 @@ function basenameOf(p: string): string {
  * MCP protocol stream).
  */
 export function deriveProjectId(root: string, usedIds: ReadonlySet<string> = new Set()): string {
-  const explicit = EXPLICIT_ID_RE.exec(root);
-  if (explicit) return explicit[1];
+  const { id: explicitId, root: bareRoot } = splitSpec(root);
+  if (explicitId !== undefined) return explicitId;
 
-  const base = sanitize(basenameOf(root));
+  const base = sanitize(basenameOf(bareRoot));
   if (!usedIds.has(base)) return base;
 
   let n = 2;

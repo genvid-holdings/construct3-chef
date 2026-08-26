@@ -157,6 +157,7 @@ Configure it in your MCP client (example for Claude Desktop or similar):
 | `preview-addon-metadata-sync` | Dry-run report of `version`/`author` drift between bundled `.c3addon` packages and `project.c3proj.usedAddons` — the read-only preview for `sync-addon-metadata`. Optional `addon` param scopes to one addon by id. Never writes |
 | `list-ops` | List user-defined ops (parameterized recipe templates) with their parameters |
 | `get-state` | Return server state: txId and extractedDirty flag |
+| `list-projects` | List every project registered at launch (id, root, extractedDir, default); every other tool still targets the default project only |
 
 **Mutate tools** (modify source files):
 

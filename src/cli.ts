@@ -76,10 +76,25 @@ yargs(hideBin(process.argv))
   .command(
     "server",
     "Start the MCP server",
-    () => {},
+    (y) =>
+      y
+        .option("project-dir", {
+          type: "array",
+          string: true,
+          nargs: 1,
+          defaultDescription: "C3_PROJECT_DIRS, C3_PROJECT_DIR, or discovery/cwd",
+          describe:
+            "Root directory of a C3 project, optionally '<id>=<path>'. Repeatable for multi-project launch; " +
+            "overrides the global --project-dir's single-root form for this command only (#95).",
+        })
+        .option("default-project", {
+          type: "string",
+          describe:
+            "Id of the project tool calls target when a launch declares more than one (defaults to the first --project-dir).",
+        }),
     async (argv) => {
       const { startServer } = await import("./mcp/server.js");
-      await startServer(argv.projectDir);
+      await startServer(argv.projectDir, undefined, argv.defaultProject);
     },
   )
   .command(

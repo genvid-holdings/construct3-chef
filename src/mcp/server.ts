@@ -20,6 +20,7 @@ import {
   REGENERATE,
   MUTATE,
   NON_IDEMPOTENT_READ,
+  isMcpError,
 } from "@genvidtech/mcp-utils";
 import type { Logger } from "@genvidtech/mcp-utils";
 import { applyParsed } from "../c3/recipeApplier.js";
@@ -93,7 +94,7 @@ exposeDocs(server, __pkgDir, { docsDir: "wiki", recursive: true });
 // extractedDir/project trio is getter-only precisely to prevent a
 // piecemeal reassignment going stale). `ctx.watcher` is assigned afterward, the
 // same two-step shape setupWatchers used before this context existed.
-let ctx: ProjectContext = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
+let defaultCtx: ProjectContext = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
 
 // The launch-fixed set of registered projects (#95 F2/F3). Always contains at
 // least `ctx` as its default — kept in lockstep with every wholesale `ctx`
@@ -104,7 +105,7 @@ let ctx: ProjectContext = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), 
 // reachable by any tool but `list-projects` until a later task threads a
 // per-call `project` selector (see ADR wiki/decisions/0034).
 let REGISTRY: ProjectRegistry = new ProjectRegistry();
-REGISTRY.add(ctx);
+REGISTRY.add(defaultCtx);
 
 // Tool annotation presets (READ_ONLY / REGENERATE / MUTATE / NON_IDEMPOTENT_READ)
 // are imported from @genvidtech/mcp-utils. NON_IDEMPOTENT_READ marks tools that read
@@ -128,6 +129,50 @@ function reg<
   handlers.set(args[0] as string, args[2] as (a: any, e: Extra) => Promise<unknown>);
   toolConfigs.set(args[0] as string, args[1] as Record<string, unknown>);
   server.registerTool(...args);
+}
+
+// The `project` selector every project-scoped tool accepts (#95). Omitted
+// (or matching no registered id) resolves to REGISTRY's default project — see
+// ProjectRegistry.resolve's own docstring for why this is a pure Map lookup,
+// never a filesystem path.
+const PROJECT_PARAM = {
+  project: z.string().optional().describe("Project id (see list-projects). Omit for the default project."),
+};
+
+/**
+ * Registration wrapper for project-scoped tools (#95). Merges
+ * {@link PROJECT_PARAM} into the caller's `inputSchema`, then wraps `handler`
+ * so it receives the *resolved* {@link ProjectContext} for the call's
+ * `project` selector as its first argument, instead of every handler body
+ * closing over the module-level `defaultCtx`.
+ *
+ * `regP` owns exactly two things: the schema parameter and the context
+ * resolution. It deliberately does NOT acquire `ctx.rwlock` — that stays in
+ * each handler body. `ReadWriteLock` has no owner tracking
+ * (`acquireWrite` queues unconditionally once `writing === true`;
+ * `acquireRead` requires `writeQueue.length === 0`), so a lock taken here
+ * would nest inside a handler's own `ctx.rwlock.read`/`.write` call (and,
+ * for a mutate tool, inside `applyRecipeWithConcurrency`'s write lock too) —
+ * hanging every call. Exactly one lock acquisition per call, taken in the
+ * handler body.
+ *
+ * `list-projects` is the sole exemption (it enumerates the registry, so it
+ * cannot itself belong to one project) and stays on plain `reg`.
+ */
+function regP(
+  name: string,
+  config: Record<string, unknown> & { inputSchema?: Record<string, import("zod").ZodTypeAny> },
+  handler: (ctx: ProjectContext, args: any, extra: Extra) => Promise<CallToolResult>,
+): void {
+  reg(
+    name,
+    { ...config, inputSchema: { ...config.inputSchema, ...PROJECT_PARAM } },
+    async ({ project, ...args }: any, extra: Extra): Promise<CallToolResult> => {
+      const resolved = REGISTRY.resolve(project);
+      if (isMcpError(resolved)) return resolved;
+      return handler(resolved, args, extra);
+    },
+  );
 }
 
 // Shared Zod schemas mirroring layoutMutator's InstanceOverrides contract.
@@ -341,7 +386,7 @@ function setupWatchers(ctx: ProjectContext): void {
 
 // ── Listing Tools ─────────────────────────────────────────────────────────────
 
-reg(
+regP(
   "list-event-sheets",
   {
     title: "List Event Sheets",
@@ -350,14 +395,14 @@ reg(
     annotations: READ_ONLY,
     inputSchema: { ...PAGINATION_PARAMS },
   },
-  async ({ offset, limit }) =>
+  async (ctx, { offset, limit }) =>
     ctx.rwlock.read(async () => {
       const sheets = toSortedRelative(ctx.project.findAllEventSheets(), ctx.project.eventSheetsDir);
       return paginatedResponse(ctx, sheets.join("\n"), offset, limit, { stale: false });
     }),
 );
 
-reg(
+regP(
   "list-layouts",
   {
     title: "List Layouts",
@@ -366,14 +411,14 @@ reg(
     annotations: READ_ONLY,
     inputSchema: { ...PAGINATION_PARAMS },
   },
-  async ({ offset, limit }) =>
+  async (ctx, { offset, limit }) =>
     ctx.rwlock.read(async () => {
       const layouts = toSortedRelative(ctx.project.findAllLayouts(), ctx.project.layoutsDir);
       return paginatedResponse(ctx, layouts.join("\n"), offset, limit, { stale: false });
     }),
 );
 
-reg(
+regP(
   "list-global-layers",
   {
     title: "List Global Layers",
@@ -382,7 +427,7 @@ reg(
     annotations: READ_ONLY,
     inputSchema: { ...PAGINATION_PARAMS },
   },
-  async ({ offset, limit }) =>
+  async (ctx, { offset, limit }) =>
     ctx.rwlock.read(async () => {
       const text = readExtracted(ctx, "global-layers.txt");
       if (text === null) {
@@ -394,7 +439,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "navigation-graph",
   {
     title: "Navigation Graph",
@@ -409,7 +454,7 @@ reg(
       ...PAGINATION_PARAMS,
     },
   },
-  async ({ format, offset, limit }) =>
+  async (ctx, { format, offset, limit }) =>
     ctx.rwlock.read(async () => {
       const config = await loadChefConfig(ctx.root);
       const layoutEventSheetMap = buildLayoutEventSheetMap(ctx.project.layoutsDir);
@@ -426,7 +471,7 @@ reg(
 
 // ── Read Tools ────────────────────────────────────────────────────────────────
 
-reg(
+regP(
   "read-dsl",
   {
     title: "Read Event Sheet DSL",
@@ -438,7 +483,7 @@ reg(
       ...PAGINATION_PARAMS,
     },
   },
-  async ({ sheet, offset, limit }) =>
+  async (ctx, { sheet, offset, limit }) =>
     ctx.rwlock.read(async () => {
       checkSourceFreshness(
         ctx,
@@ -455,7 +500,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "read-dsl-index",
   {
     title: "Read Event Sheet DSL Index",
@@ -471,7 +516,7 @@ reg(
       ...PAGINATION_PARAMS,
     },
   },
-  async ({ sheet, grep, offset, limit }) =>
+  async (ctx, { sheet, grep, offset, limit }) =>
     ctx.rwlock.read(async () => {
       checkSourceFreshness(
         ctx,
@@ -491,7 +536,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "read-event-sids",
   {
     title: "Read Event SIDs from Source",
@@ -510,7 +555,7 @@ reg(
         ),
     },
   },
-  async ({ sheet, grep }) =>
+  async (ctx, { sheet, grep }) =>
     ctx.rwlock.read(async () => {
       const sourcePath = path.join(ctx.project.eventSheetsDir, `${sheet}.json`);
       if (!fs.existsSync(sourcePath)) {
@@ -536,7 +581,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "read-scripts",
   {
     title: "Read Extracted TypeScript",
@@ -548,7 +593,7 @@ reg(
       ...PAGINATION_PARAMS,
     },
   },
-  async ({ sheet, offset, limit }) =>
+  async (ctx, { sheet, offset, limit }) =>
     ctx.rwlock.read(async () => {
       checkSourceFreshness(
         ctx,
@@ -568,7 +613,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "read-layout",
   {
     title: "Read Layout Summary",
@@ -580,7 +625,7 @@ reg(
       ...PAGINATION_PARAMS,
     },
   },
-  async ({ layout, offset, limit }) =>
+  async (ctx, { layout, offset, limit }) =>
     ctx.rwlock.read(async () => {
       checkSourceFreshness(
         ctx,
@@ -599,7 +644,7 @@ reg(
 
 // ── Reference Tools ───────────────────────────────────────────────────────────
 
-reg(
+regP(
   "read-template-scope",
   {
     title: "Read Template Scope",
@@ -608,7 +653,7 @@ reg(
     annotations: READ_ONLY,
     inputSchema: { ...PAGINATION_PARAMS },
   },
-  async ({ offset, limit }) =>
+  async (ctx, { offset, limit }) =>
     ctx.rwlock.read(async () => {
       const text = readExtracted(ctx, "template-scope.txt");
       if (text === null) {
@@ -620,7 +665,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "read-sid-registry",
   {
     title: "Read SID Registry",
@@ -629,7 +674,7 @@ reg(
     annotations: READ_ONLY,
     inputSchema: { ...PAGINATION_PARAMS },
   },
-  async ({ offset, limit }) =>
+  async (ctx, { offset, limit }) =>
     ctx.rwlock.read(async () => {
       const text = readExtracted(ctx, "sid-registry.txt");
       if (text === null) {
@@ -641,7 +686,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "generate-sids",
   {
     title: "Generate Unique SIDs",
@@ -670,7 +715,7 @@ reg(
   // concurrent callers). Serializing with `ctx.rwlock.write()` makes both rigorous.
   // The NON_IDEMPOTENT_READ annotation describes the tool's effect on project state
   // (none — source files unchanged); the write lock is internal-state safety.
-  async ({ count = 1, extraUsedSids }) =>
+  async (ctx, { count = 1, extraUsedSids }) =>
     ctx.rwlock.write(
       withMcpErrors(
         async () => {
@@ -691,7 +736,7 @@ reg(
     ),
 );
 
-reg(
+regP(
   "list-include-tree",
   {
     title: "List Include Tree",
@@ -709,7 +754,7 @@ reg(
         .describe("Return a flat deduplicated list of all included sheet names instead of a tree (default: false)"),
     },
   },
-  async ({ path: sheetPath, functions: includeFunctions, flat }) =>
+  async (ctx, { path: sheetPath, functions: includeFunctions, flat }) =>
     ctx.rwlock.read(async () => {
       const tree = resolveIncludeTree(sheetPath, ctx.root, { includeFunctions: includeFunctions ?? false });
 
@@ -725,7 +770,7 @@ reg(
 
 // ── Search Tool ───────────────────────────────────────────────────────────────
 
-reg(
+regP(
   "search",
   {
     title: "Search Files",
@@ -745,7 +790,7 @@ reg(
       context: z.number().int().min(0).optional().describe("Context lines around matches (like grep -C)"),
     },
   },
-  async ({ pattern, type, path: searchPath, context }) =>
+  async (ctx, { pattern, type, path: searchPath, context }) =>
     ctx.rwlock.read(
       withMcpErrors(
         async () => {
@@ -784,7 +829,7 @@ reg(
 
 // ── Anchor Resolution Tool ────────────────────────────────────────────────────
 
-reg(
+regP(
   "resolve-anchor",
   {
     title: "Resolve DSL Anchor",
@@ -797,7 +842,7 @@ reg(
       value: z.string().describe("Line number, SID (digits only), or name/regex pattern"),
     },
   },
-  async ({ sheet, by, value }) =>
+  async (ctx, { sheet, by, value }) =>
     ctx.rwlock.read(async () => {
       checkSourceFreshness(
         ctx,
@@ -854,7 +899,7 @@ reg(
 
 // ── Recipe Tools ─────────────────────────────────────────────────────────────
 
-reg(
+regP(
   "validate-recipe",
   {
     title: "Validate Recipe (Dry Run)",
@@ -865,7 +910,7 @@ reg(
       recipe: z.string().describe("Recipe JSON string"),
     },
   },
-  async ({ recipe: recipeJson }) =>
+  async (ctx, { recipe: recipeJson }) =>
     ctx.rwlock.read(
       withMcpErrors(
         async () => {
@@ -942,7 +987,7 @@ async function applyRecipeWithConcurrency(
   );
 }
 
-reg(
+regP(
   "apply-recipe",
   {
     title: "Apply Recipe",
@@ -955,7 +1000,7 @@ reg(
       regenerate: z.boolean().optional().describe("Regenerate extracted/ files after applying (default: true)"),
     },
   },
-  async ({ recipe: recipeJson, txId: expectedTxId, regenerate }, extra: Extra) => {
+  async (ctx, { recipe: recipeJson, txId: expectedTxId, regenerate }, extra: Extra) => {
     let recipe: Recipe;
     try {
       recipe = JSON.parse(recipeJson);
@@ -968,7 +1013,7 @@ reg(
 
 // ── Regenerate Tool ─────────────────────────────────────────────────────────
 
-reg(
+regP(
   "regenerate",
   {
     title: "Regenerate Extracted Files",
@@ -977,7 +1022,7 @@ reg(
     annotations: REGENERATE,
     inputSchema: {},
   },
-  async (_args: Record<string, never>, extra: Extra) =>
+  async (ctx, _args: Record<string, never>, extra: Extra) =>
     ctx.rwlock.write(
       withMcpErrors(
         async () => {
@@ -1004,7 +1049,7 @@ reg(
 
 // ── Project Tools ────────────────────────────────────────────────────────────
 
-reg(
+regP(
   "validate-project",
   {
     title: "Validate project.c3proj",
@@ -1013,7 +1058,7 @@ reg(
     annotations: READ_ONLY,
     inputSchema: {},
   },
-  async () =>
+  async (ctx) =>
     ctx.rwlock.read(
       withMcpErrors(
         async () => {
@@ -1043,7 +1088,7 @@ reg(
     ),
 );
 
-reg(
+regP(
   "sync-project",
   {
     title: "Sync project.c3proj",
@@ -1054,7 +1099,7 @@ reg(
       txId: z.string().optional().describe("Expected txId — if stale, sync is rejected"),
     },
   },
-  async ({ txId: expectedTxId }) =>
+  async (ctx, { txId: expectedTxId }) =>
     ctx.rwlock.write(
       withMcpErrors(
         async () => {
@@ -1080,7 +1125,7 @@ reg(
 
 // ── Addon Tool ──────────────────────────────────────────────────────────────
 
-reg(
+regP(
   "read-addon",
   {
     title: "Read Addon",
@@ -1092,7 +1137,7 @@ reg(
       file: z.string().optional().describe("Raw file entry to read within the addon (e.g. 'addon.json')"),
     },
   },
-  async ({ name, file }) =>
+  async (ctx, { name, file }) =>
     ctx.rwlock.read(
       withMcpErrors(
         async () => {
@@ -1140,7 +1185,7 @@ reg(
     ),
 );
 
-reg(
+regP(
   "validate-addons",
   {
     title: "Validate Addons",
@@ -1156,7 +1201,7 @@ reg(
         ),
     },
   },
-  async ({ addon }) =>
+  async (ctx, { addon }) =>
     ctx.rwlock.read(
       withMcpErrors(
         async () => {
@@ -1182,7 +1227,7 @@ reg(
     ),
 );
 
-reg(
+regP(
   "list-addons",
   {
     title: "List Addons",
@@ -1191,7 +1236,7 @@ reg(
     annotations: READ_ONLY,
     inputSchema: {},
   },
-  async () =>
+  async (ctx) =>
     ctx.rwlock.read(
       withMcpErrors(async () => mcpContent(formatAddonInventory(listAddons(ctx.root)), txIdLine(ctx)), {
         prefix: "list-addons:",
@@ -1200,7 +1245,7 @@ reg(
     ),
 );
 
-reg(
+regP(
   "diff-addon-aces",
   {
     title: "Diff Addon ACEs",
@@ -1219,7 +1264,7 @@ reg(
   // read-only; resolveAceSource containment-checks the addon-id/dir branch
   // internally. No txId footer either — addon packages aren't tx-tracked
   // (not in SOURCE_DIRS, not project.c3proj), same as read-addon.
-  async ({ from, to }) =>
+  async (ctx, { from, to }) =>
     ctx.rwlock.read(
       withMcpErrors(
         async () => {
@@ -1234,7 +1279,7 @@ reg(
     ),
 );
 
-reg(
+regP(
   "scan-addon-usage",
   {
     title: "Scan Addon Usage",
@@ -1253,7 +1298,7 @@ reg(
         ),
     },
   },
-  async ({ addon, from }) =>
+  async (ctx, { addon, from }) =>
     ctx.rwlock.read(
       withMcpErrors(async () => mcpContent(formatAddonUsage(scanAddonUsage(ctx.root, addon, from)), txIdLine(ctx)), {
         prefix: "scan-addon-usage:",
@@ -1273,7 +1318,7 @@ const ADDON_METADATA_SYNC_DIRECTION_SCHEMA = z
       "read-only report (chef has no .c3addon writer, so this direction never writes).",
   );
 
-reg(
+regP(
   "preview-addon-metadata-sync",
   {
     title: "Preview Addon Metadata Sync",
@@ -1287,7 +1332,7 @@ reg(
       addon: z.string().optional().describe("Scope to a single addon by discovered id. Omit to preview all."),
     },
   },
-  async ({ direction, addon }) =>
+  async (ctx, { direction, addon }) =>
     ctx.rwlock.read(
       withMcpErrors(
         async () => {
@@ -1302,7 +1347,7 @@ reg(
     ),
 );
 
-reg(
+regP(
   "sync-addon-metadata",
   {
     title: "Sync Addon Metadata",
@@ -1319,7 +1364,7 @@ reg(
       txId: z.string().optional().describe("Expected txId — if stale, sync is rejected"),
     },
   },
-  async ({ direction, addon, txId: expectedTxId }) =>
+  async (ctx, { direction, addon, txId: expectedTxId }) =>
     ctx.rwlock.write(
       withMcpErrors(
         async () => {
@@ -1361,7 +1406,7 @@ reg(
 
 // ── Search Docs Tool ─────────────────────────────────────────────────────────
 
-reg(
+regP(
   "search-docs",
   {
     title: "Search C3 Docs",
@@ -1377,7 +1422,7 @@ reg(
       limit: z.number().int().min(1).optional().describe("Max lines to return. Omit to return all."),
     },
   },
-  async ({ query, object, id, param, offset, limit }) =>
+  async (ctx, { query, object, id, param, offset, limit }) =>
     ctx.rwlock.read(
       withMcpErrors(
         async () => {
@@ -1420,7 +1465,7 @@ reg(
 
 // ── Scaffold Tools ──────────────────────────────────────────────────────
 
-reg(
+regP(
   "scaffold-layout",
   {
     title: "Scaffold Layout",
@@ -1440,7 +1485,7 @@ reg(
       regenerate: z.boolean().optional().describe("Regenerate extracted/ files after scaffolding (default: true)"),
     },
   },
-  async ({ source, name, path: outRelPath, eventSheet, txId: expectedTxId, regenerate }, extra: Extra) =>
+  async (ctx, { source, name, path: outRelPath, eventSheet, txId: expectedTxId, regenerate }, extra: Extra) =>
     ctx.rwlock.write(
       withMcpErrors(
         async () => {
@@ -1523,7 +1568,7 @@ reg(
     ),
 );
 
-reg(
+regP(
   "scaffold-sprite",
   {
     title: "Scaffold Sprite",
@@ -1536,7 +1581,7 @@ reg(
       txId: z.string().optional().describe("Expected txId — if stale, scaffold is rejected"),
     },
   },
-  async ({ source, name: targetName, txId: expectedTxId }) =>
+  async (ctx, { source, name: targetName, txId: expectedTxId }) =>
     ctx.rwlock.write(
       withMcpErrors(
         async () => {
@@ -1671,7 +1716,7 @@ async function runWorkflowRecipe(
   )();
 }
 
-reg(
+regP(
   "extract-template",
   {
     title: "Extract Template",
@@ -1700,6 +1745,7 @@ reg(
     },
   },
   async (
+    ctx,
     {
       sourceLayout,
       sourceType,
@@ -1735,7 +1781,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "templatize-in-place",
   {
     title: "Templatize In Place",
@@ -1751,7 +1797,7 @@ reg(
       regenerate: z.boolean().optional().describe("Regenerate extracted/ after apply (default: true)"),
     },
   },
-  async ({ layout, type, templateName, inheritOverrides, txId: expectedTxId, regenerate }, extra: Extra) =>
+  async (ctx, { layout, type, templateName, inheritOverrides, txId: expectedTxId, regenerate }, extra: Extra) =>
     ctx.rwlock.write(async () => {
       const recipe: Recipe = {
         layouts: {
@@ -1762,7 +1808,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "clone-replica-to-layouts",
   {
     title: "Clone Replica To Layouts",
@@ -1794,7 +1840,7 @@ reg(
       regenerate: z.boolean().optional().describe("Regenerate extracted/ after apply (default: true)"),
     },
   },
-  async ({ templatesLayout, templateName, sourceType, targets, txId: expectedTxId, regenerate }, extra: Extra) =>
+  async (ctx, { templatesLayout, templateName, sourceType, targets, txId: expectedTxId, regenerate }, extra: Extra) =>
     ctx.rwlock.write(async () => {
       const recipe: Recipe = {
         layouts: {
@@ -1812,7 +1858,7 @@ reg(
     }),
 );
 
-reg(
+regP(
   "replace-instance-with-replica",
   {
     title: "Replace Instance With Replica",
@@ -1836,6 +1882,7 @@ reg(
     },
   },
   async (
+    ctx,
     { layout, type, templatesLayout, templateName, layer, inheritOverrides, txId: expectedTxId, regenerate },
     extra: Extra,
   ) =>
@@ -1860,7 +1907,7 @@ reg(
 
 // ── Layer Mutation Tools ─────────────────────────────────────────────────────
 
-reg(
+regP(
   "remove-layer",
   {
     title: "Remove Layer",
@@ -1879,7 +1926,7 @@ reg(
       regenerate: z.boolean().optional().describe("Regenerate extracted/ files after removing (default: true)"),
     },
   },
-  async ({ layout, layer, cascade, removeInstances, txId: expectedTxId, regenerate }, extra: Extra) =>
+  async (ctx, { layout, layer, cascade, removeInstances, txId: expectedTxId, regenerate }, extra: Extra) =>
     ctx.rwlock.write(async () => {
       // Path traversal check — layout must stay within layouts/
       const layoutsDir = ctx.project.layoutsDir;
@@ -1906,7 +1953,7 @@ reg(
 
 // ── State Tool ───────────────────────────────────────────────────────────────
 
-reg(
+regP(
   "get-state",
   {
     title: "Get Server State",
@@ -1915,7 +1962,7 @@ reg(
     annotations: READ_ONLY,
     inputSchema: {},
   },
-  async () =>
+  async (ctx) =>
     ctx.rwlock.read(async () => {
       return {
         content: [
@@ -1932,14 +1979,17 @@ reg(
 // Reads REGISTRY's static per-project metadata (id/root/extractedDir, all
 // getter-only since construction — see ProjectContext's own docstring), so
 // unlike every other tool here it needs no ctx.rwlock.read: there is no
-// mutable shared state to serialize against.
+// mutable shared state to serialize against. Also the sole exemption from the
+// `project` selector every other tool now accepts via `regP` (#95) — it
+// enumerates the registry, so it cannot itself belong to one project — and
+// so it stays on plain `reg`.
 
 reg(
   "list-projects",
   {
     title: "List Registered Projects",
     description:
-      "List every project registered at server launch (via repeated --project-dir, C3_PROJECT_DIRS, or the single-root C3_PROJECT_DIR/discovery/cwd path), each with its id, root, extractedDir, and whether it is the default. Every OTHER tool still targets the default project only (#95 F2/F3) — this tool exists to make a multi-root launch inspectable ahead of a later per-call project selector.",
+      "List every project registered at server launch (via repeated --project-dir, C3_PROJECT_DIRS, or the single-root C3_PROJECT_DIR/discovery/cwd path), each with its id, root, extractedDir, and whether it is the default. Every other tool accepts a `project` selector (see its `project` parameter) to target a non-default registered project; startup validation, auto-generation, the file watcher, and the ops registry still wire up only the default project.",
     annotations: READ_ONLY,
     inputSchema: {},
   },
@@ -1960,17 +2010,24 @@ export function __getHandler(name: string): ((args: any, extra: Extra) => Promis
 export function __getToolConfig(name: string): Record<string, unknown> | undefined {
   return toolConfigs.get(name);
 }
+// Every registered tool name, derived from the live `toolConfigs` registry
+// (populated by every `reg`/`regP` call as it runs) rather than a hand-kept
+// list — so a test iterating this can't drift from what's actually
+// registered (#95, T-C1).
+export function __listToolNames(): string[] {
+  return [...toolConfigs.keys()];
+}
 export function __getServer(): McpServer {
   return server;
 }
 export function __setTestWatcher(w: OptimisticWatcher): void {
-  ctx.watcher = w;
+  defaultCtx.watcher = w;
 }
 export function __setExtractedDirty(value: boolean): void {
-  ctx.extractedDirty = value;
+  defaultCtx.extractedDirty = value;
 }
 export function __getExtractedDirty(): boolean {
-  return ctx.extractedDirty;
+  return defaultCtx.extractedDirty;
 }
 // __getProjectRoot was removed (#95, F1) — 0 consumers across src/ and test/,
 // and server.ts is off the src/index.ts barrel, so its removal carries no
@@ -1990,10 +2047,10 @@ export function __setProjectRoot(dir: string): void {
   // fresh tmp dir without re-setting the watcher (test/mcp/serverHandlers.test.ts's
   // "[strays] report" block). A wholesale reconstruction that dropped the
   // watcher would otherwise strand those suites on an unset ctx.watcher.
-  const { watcher: prevWatcher, ops: prevOps } = ctx;
-  ctx = new ProjectContext(ctx.id, dir, DEFAULT_CHEF_CONFIG);
-  ctx.watcher = prevWatcher;
-  ctx.ops = prevOps;
+  const { watcher: prevWatcher, ops: prevOps } = defaultCtx;
+  defaultCtx = new ProjectContext(defaultCtx.id, dir, DEFAULT_CHEF_CONFIG);
+  defaultCtx.watcher = prevWatcher;
+  defaultCtx.ops = prevOps;
   reseedRegistry();
 }
 export function __setExtractedDir(dir: string): void {
@@ -2003,23 +2060,26 @@ export function __setExtractedDir(dir: string): void {
   // tests do this). path.relative + the ProjectContext constructor's
   // path.join(root, config.extractedDir) round trips back to exactly `dir`,
   // including when `dir` sits outside `root`.
-  const { watcher: prevWatcher, ops: prevOps } = ctx;
-  ctx = new ProjectContext(ctx.id, ctx.root, { ...ctx.config, extractedDir: path.relative(ctx.root, dir) });
-  ctx.watcher = prevWatcher;
-  ctx.ops = prevOps;
+  const { watcher: prevWatcher, ops: prevOps } = defaultCtx;
+  defaultCtx = new ProjectContext(defaultCtx.id, defaultCtx.root, {
+    ...defaultCtx.config,
+    extractedDir: path.relative(defaultCtx.root, dir),
+  });
+  defaultCtx.watcher = prevWatcher;
+  defaultCtx.ops = prevOps;
   reseedRegistry();
 }
 export function __resetTestState(): void {
-  ctx = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
+  defaultCtx = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
   reseedRegistry();
 }
-// Rebuild REGISTRY as the single-entry { ctx.id: ctx } registry — keeps
-// list-projects consistent with whatever the test seams above just pointed
-// `ctx` at. Not used by startServer, which builds a real (possibly
-// multi-entry) registry from the launch surface instead (see below).
+// Rebuild REGISTRY as the single-entry { defaultCtx.id: defaultCtx } registry —
+// keeps list-projects consistent with whatever the test seams above just
+// pointed `defaultCtx` at. Not used by startServer, which builds a real
+// (possibly multi-entry) registry from the launch surface instead (see below).
 function reseedRegistry(): void {
   REGISTRY = new ProjectRegistry();
-  REGISTRY.add(ctx);
+  REGISTRY.add(defaultCtx);
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
@@ -2036,26 +2096,28 @@ export async function startServer(
   REGISTRY = await buildProjectRegistry(projectDirs, overrides, defaultProject, {
     log: (msg) => console.error(msg),
   });
-  // Every tool but list-projects still reads the sole module-level `ctx` —
-  // multi-root is DECLARABLE via the registry above but only the default
-  // project is REACHABLE until a later task threads a per-call `project`
-  // selector (see ADR wiki/decisions/0034). A non-default registered project
-  // therefore gets no startup validation/auto-generation/watcher/ops below —
-  // it's a registry entry, not yet a live one.
-  ctx = REGISTRY.get(REGISTRY.defaultId)!;
+  // Every project-scoped tool now accepts a per-call `project` selector and
+  // resolves its ProjectContext from REGISTRY at call time (see `regP`,
+  // ADR wiki/decisions/0034). `defaultCtx` — the sole module-level context
+  // this file otherwise carries — is still what startup validation,
+  // auto-generation, the file watcher, and the OpsRegistry wire up below: a
+  // non-default registered project gets no startup validation/auto-
+  // generation/watcher/ops of its own, it's a registry entry, reachable by
+  // every regP tool, but not a live one at startup.
+  defaultCtx = REGISTRY.get(REGISTRY.defaultId)!;
 
   // Startup validation — warn but don't hard-fail
-  const c3projPath = path.join(ctx.root, "project.c3proj");
+  const c3projPath = path.join(defaultCtx.root, "project.c3proj");
   if (!fs.existsSync(c3projPath)) {
     console.error(
-      `[construct3-chef] Warning: project.c3proj not found in ${ctx.root} — not a Construct 3 project directory`,
+      `[construct3-chef] Warning: project.c3proj not found in ${defaultCtx.root} — not a Construct 3 project directory`,
     );
   }
-  if (!fs.existsSync(ctx.extractedDir)) {
+  if (!fs.existsSync(defaultCtx.extractedDir)) {
     console.error(`[construct3-chef] extracted/ not found — auto-generating...`);
     try {
       const log: Logger = (...args) => console.error(`[construct3-chef]   ${args.map(String).join(" ")}`);
-      await runGenerators(ctx, log);
+      await runGenerators(defaultCtx, log);
       console.error(`[construct3-chef] Auto-generation complete`);
     } catch (e) {
       console.error(
@@ -2064,23 +2126,23 @@ export async function startServer(
       console.error(`[construct3-chef] Run 'npm run generate-c3' manually to generate extracted files`);
     }
   }
-  console.error(`[construct3-chef] Starting server in ${ctx.root}`);
+  console.error(`[construct3-chef] Starting server in ${defaultCtx.root}`);
 
   // Resolve ops dir from already-loaded config (avoids a double loadChefConfig call).
-  const opsDir = resolveWithin(ctx.root, ctx.config.ops.dir) ?? path.join(ctx.root, "ops");
+  const opsDir = resolveWithin(defaultCtx.root, defaultCtx.config.ops.dir) ?? path.join(defaultCtx.root, "ops");
 
-  setupWatchers(ctx);
+  setupWatchers(defaultCtx);
 
   // Start the OpsRegistry BEFORE server.connect() so initial op-* tools are
   // present from the first tools/list response (no spurious list_changed before connect).
   const opsRegistry = new OpsRegistry({
     server,
     opsDir,
-    watch: ctx.config.ops.watch,
-    applyRecipe: (recipe, opts, extra) => applyRecipeWithConcurrency(ctx, recipe, opts, extra),
+    watch: defaultCtx.config.ops.watch,
+    applyRecipe: (recipe, opts, extra) => applyRecipeWithConcurrency(defaultCtx, recipe, opts, extra),
     log: emitLog,
   });
-  ctx.ops = opsRegistry;
+  defaultCtx.ops = opsRegistry;
   opsRegistry.start();
 
   // Graceful shutdown

@@ -8,6 +8,7 @@ import { READ_ONLY, walkFiles, toPosixPath } from "@genvidtech/mcp-utils";
 import {
   __getHandler,
   __getToolConfig,
+  __listToolNames,
   __setTestWatcher,
   __setExtractedDirty,
   __getExtractedDirty,
@@ -1122,5 +1123,46 @@ describe("MCP server handler response shaping", () => {
 
       assertNoTrailingNewline(path.join(tmp, "objectTypes", "T3ClonedSprite.json"), 0x7d);
     });
+  });
+});
+
+// ── Project-scoped tool registration (#95) ──────────────────────────────
+// Independent of the FIXTURE_DIR/watcher/tmp-project scaffolding above —
+// __getToolConfig/__listToolNames read the module-level `toolConfigs` map
+// populated once at import time by every `reg`/`regP` call, not per-project
+// state, so this suite needs no beforeEach/afterEach of its own.
+
+describe("MCP server project-scoped tool registration (#95)", () => {
+  // list-projects is the sole exemption from the `project` selector every
+  // other tool accepts via `regP` — it enumerates the registry, so it
+  // cannot itself belong to one project (see server.ts's own comment above
+  // the list-projects registration).
+  const EXEMPT = ["list-projects"];
+
+  it("T-C1: every non-exempt registered tool declares a 'project' input param", () => {
+    const names = __listToolNames();
+
+    // Positive control: derived from the LIVE handler registry, so a
+    // registry that silently enumerates nothing (e.g. a broken import path)
+    // cannot pass this assertion vacuously.
+    expect(names.length, `registered tool count: ${names.length}`).to.be.greaterThan(30);
+
+    const nonExempt = names.filter((n) => !EXEMPT.includes(n));
+    expect(nonExempt.length, "non-exempt tool count").to.be.greaterThan(30);
+
+    for (const name of nonExempt) {
+      const config = __getToolConfig(name);
+      expect(config, `${name}: no registered tool config`).to.exist;
+      const inputSchema = config!.inputSchema as Record<string, z.ZodTypeAny> | undefined;
+      expect(inputSchema, `${name}: no inputSchema`).to.exist;
+      expect(inputSchema!.project, `${name}: missing 'project' input param`).to.exist;
+    }
+  });
+
+  it("T-C1b: the sole exemption (list-projects) does NOT declare a 'project' param", () => {
+    const config = __getToolConfig("list-projects");
+    expect(config, "list-projects: no registered tool config").to.exist;
+    const inputSchema = config!.inputSchema as Record<string, z.ZodTypeAny> | undefined;
+    expect(inputSchema?.project, "list-projects unexpectedly gained a 'project' param").to.be.undefined;
   });
 });

@@ -16,9 +16,11 @@ import type { ProjectContext } from "./projectContext.js";
  * server-internal wire format, not library API (repo is at 1.0.0, and a
  * barrel export is a permanent public-API commitment).
  *
- * Nothing imports this module yet — `server.ts` is wired to it in a later
- * task (F4 in `plan.md`), once the project-id-carrying `ProjectRegistry`
- * (P2, sibling task) and the `ctx`-per-call selector (F5) exist.
+ * `server.ts` routes every txId site through this module: 10 accepting
+ * schemas, 6 comparisons, and both emissions (`txIdLine` and `get-state`'s
+ * inline one). That conversion landed while the registry still held exactly
+ * one project, which is what made it atomic by construction — one context
+ * means one counter, so no intermediate state could misattribute a token.
  */
 
 /** Project ids may not contain `:` (enforced at `ProjectRegistry` construction,
@@ -95,17 +97,23 @@ export function compareTxToken(ctx: ProjectContext, token?: string, action?: str
   if (token === undefined) {
     return null;
   }
+  // Every rejection carries the CURRENT token as a footer, matching what each
+  // call site did by hand before this codec existed (`{ extraLines: [txIdLine(ctx)] }`).
+  // It is what lets a client re-validate immediately instead of issuing a
+  // second call just to learn the value it was already being rejected against.
+  const current = formatTxToken(ctx.id, ctx.watcher.txId);
+  const footer = { extraLines: [`txId: ${current}`] };
+
   const parsed = parseTxToken(token);
   if ("error" in parsed) {
-    return mcpError(parsed.error);
+    return mcpError(parsed.error, footer);
   }
   if (parsed.id !== ctx.id) {
-    return mcpError(`txId '${token}' is for project '${parsed.id}' but this call targets project '${ctx.id}'`);
+    return mcpError(`txId '${token}' is for project '${parsed.id}' but this call targets project '${ctx.id}'`, footer);
   }
-  const current = formatTxToken(ctx.id, ctx.watcher.txId);
   if (parsed.counter !== ctx.watcher.txId) {
     const suffix = action === undefined ? "" : ` before ${action}`;
-    return mcpError(`State changed (expected ${token}, got ${current}) — re-validate${suffix}`);
+    return mcpError(`State changed (expected ${token}, got ${current}) — re-validate${suffix}`, footer);
   }
   return null;
 }

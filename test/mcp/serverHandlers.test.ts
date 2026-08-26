@@ -150,7 +150,7 @@ describe("MCP server handler response shaping", () => {
     expect(result.isError).to.be.undefined;
     expect(result.content).to.have.length(1);
     expect(result.content[0].type).to.equal("text");
-    expect(result.content[0].text).to.equal("txId: 5\nextractedDirty: false");
+    expect(result.content[0].text).to.equal("txId: default:5\nextractedDirty: false");
   });
 
   // ── 1b. list-projects: reflects the single-entry registry __setProjectRoot
@@ -225,11 +225,13 @@ describe("MCP server handler response shaping", () => {
     expect(handler).to.exist;
 
     __setExtractedDirty(true); // skip registry freshness scan
-    const result = (await handler({ recipe: "{}", txId: 4 }, makeExtra())) as any;
+    const result = (await handler({ recipe: "{}", txId: "default:4" }, makeExtra())) as any;
 
     expect(result.isError).to.be.true;
     expect(result.content).to.have.length(1);
-    expect(result.content[0].text).to.equal("State changed (expected 4, got 5) — re-validate before applying\ntxId: 5");
+    expect(result.content[0].text).to.equal(
+      "State changed (expected default:4, got default:5) — re-validate before applying\ntxId: default:5",
+    );
     expect(watcher.bumped).to.equal(0);
   });
 
@@ -240,12 +242,12 @@ describe("MCP server handler response shaping", () => {
     expect(handler).to.exist;
 
     __setExtractedDirty(true); // skip registry freshness scan; also tests dirty stays true
-    const result = (await handler({ recipe: "{ not json", txId: 5 }, makeExtra())) as any;
+    const result = (await handler({ recipe: "{ not json", txId: "default:5" }, makeExtra())) as any;
 
     expect(result.isError).to.be.true;
     expect(result.content).to.have.length(1);
     expect(result.content[0].text).to.match(/^Error:/);
-    expect(result.content[0].text).to.include("txId: 5");
+    expect(result.content[0].text).to.include("txId: default:5");
     expect(watcher.bumped).to.equal(0);
     expect(__getExtractedDirty()).to.be.true;
   });
@@ -257,11 +259,11 @@ describe("MCP server handler response shaping", () => {
     expect(handler).to.exist;
 
     __setExtractedDirty(true); // skip registry freshness scan
-    const result = (await handler({ recipe: VALID_RECIPE, txId: 5, regenerate: false }, makeExtra())) as any;
+    const result = (await handler({ recipe: VALID_RECIPE, txId: "default:5", regenerate: false }, makeExtra())) as any;
 
     expect(result.isError).to.be.undefined;
     expect(result.content).to.have.length(1);
-    expect(result.content[0].text).to.include("txId: 6");
+    expect(result.content[0].text).to.include("txId: default:6");
     expect(watcher.bumped).to.equal(1);
     // regenerate:false should NOT clear dirty
     // (dirty was true; test verifies it stays unchanged from this handler's perspective)
@@ -277,11 +279,11 @@ describe("MCP server handler response shaping", () => {
     expect(handler).to.exist;
 
     __setExtractedDirty(true); // skip registry freshness scan
-    const result = (await handler({ recipe: VALID_RECIPE, txId: 5 }, makeExtra())) as any;
+    const result = (await handler({ recipe: VALID_RECIPE, txId: "default:5" }, makeExtra())) as any;
 
     expect(result.isError).to.be.undefined;
     expect(result.content).to.have.length(1);
-    expect(result.content[0].text).to.include("txId: 6");
+    expect(result.content[0].text).to.include("txId: default:6");
     expect(watcher.bumped).to.equal(1);
     // a full regenerate clears the stale flag
     expect(__getExtractedDirty()).to.be.false;
@@ -599,7 +601,7 @@ describe("MCP server handler response shaping", () => {
       expect(result.content).to.have.length(1);
       expect(result.content[0].type).to.equal("text");
       const text: string = result.content[0].text;
-      expect(text).to.match(/\ntxId: 5$/);
+      expect(text).to.match(/\ntxId: default:5$/);
       expect(text).to.include("Sprite2 [MyCustomBehavior]");
       expect(text).to.include("9patch [MyCustomBehavior]");
       expect(watcher.bumped).to.equal(0);
@@ -616,7 +618,7 @@ describe("MCP server handler response shaping", () => {
     expect(result.isError).to.be.true;
     expect(result.content).to.have.length(1);
     expect(result.content[0].text).to.include("Cancelled");
-    expect(result.content[0].text).to.match(/\ntxId: 6$/);
+    expect(result.content[0].text).to.match(/\ntxId: default:6$/);
     expect(watcher.bumped).to.equal(1);
     expect(__getExtractedDirty()).to.be.true;
   });
@@ -663,11 +665,11 @@ describe("MCP server handler response shaping", () => {
 
       const validateHandler = __getHandler("validate-addons")!;
       const validateResult = (await validateHandler({}, makeExtra())) as any;
-      expect(validateResult.content[0].text).to.equal(`${formatAddonValidation(validateAddons(tmp))}\ntxId: 5`);
+      expect(validateResult.content[0].text).to.equal(`${formatAddonValidation(validateAddons(tmp))}\ntxId: default:5`);
 
       const listHandler = __getHandler("list-addons")!;
       const listResult = (await listHandler({}, makeExtra())) as any;
-      expect(listResult.content[0].text).to.equal(`${formatAddonInventory(listAddons(tmp))}\ntxId: 5`);
+      expect(listResult.content[0].text).to.equal(`${formatAddonInventory(listAddons(tmp))}\ntxId: default:5`);
 
       // A prose cross-reference to addonMetadataSync.ts (its module doc comment
       // names the sibling module by design — see the "Duality note" above
@@ -687,12 +689,12 @@ describe("MCP server handler response shaping", () => {
       const before = fs.readFileSync(manifestPath);
 
       const handler = __getHandler("sync-addon-metadata")!;
-      const result = (await handler({ direction: "manifest-from-package", txId: 4 }, makeExtra())) as any;
+      const result = (await handler({ direction: "manifest-from-package", txId: "default:4" }, makeExtra())) as any;
 
       expect(result.isError).to.be.true;
       expect(result.content).to.have.length(1);
       expect(result.content[0].text).to.equal(
-        "State changed (expected 4, got 5) — re-validate before syncing\ntxId: 5",
+        "State changed (expected default:4, got default:5) — re-validate before syncing\ntxId: default:5",
       );
       expect(watcher.bumped).to.equal(0);
       expect(fs.readFileSync(manifestPath).equals(before), "manifest bytes must be unchanged").to.equal(true);
@@ -703,11 +705,11 @@ describe("MCP server handler response shaping", () => {
       expect(__getExtractedDirty()).to.equal(false);
 
       const handler = __getHandler("sync-addon-metadata")!;
-      const result = (await handler({ direction: "manifest-from-package", txId: 5 }, makeExtra())) as any;
+      const result = (await handler({ direction: "manifest-from-package", txId: "default:5" }, makeExtra())) as any;
 
       expect(result.isError).to.be.undefined;
       expect(result.content).to.have.length(1);
-      expect(result.content[0].text).to.include("txId: 6");
+      expect(result.content[0].text).to.include("txId: default:6");
       expect(watcher.bumped).to.equal(1);
       expect(__getExtractedDirty()).to.equal(false);
 
@@ -729,14 +731,14 @@ describe("MCP server handler response shaping", () => {
       const syncHandler = __getHandler("sync-addon-metadata")!;
 
       const packageFromManifestResult = (await syncHandler(
-        { direction: "package-from-manifest", txId: watcher.txId },
+        { direction: "package-from-manifest", txId: `default:${watcher.txId}` },
         makeExtra(),
       )) as any;
       expect(packageFromManifestResult.isError).to.be.undefined;
       expect(watcher.bumped).to.equal(0);
 
       const noDriftResult = (await syncHandler(
-        { direction: "manifest-from-package", txId: watcher.txId },
+        { direction: "manifest-from-package", txId: `default:${watcher.txId}` },
         makeExtra(),
       )) as any;
       expect(noDriftResult.isError).to.be.undefined;
@@ -762,7 +764,7 @@ describe("MCP server handler response shaping", () => {
       __setTestWatcher(trackingWatcher as any);
 
       const handler = __getHandler("sync-addon-metadata")!;
-      const result = (await handler({ direction: "manifest-from-package", txId: 5 }, makeExtra())) as any;
+      const result = (await handler({ direction: "manifest-from-package", txId: "default:5" }, makeExtra())) as any;
 
       expect(result.isError).to.be.undefined;
       expect(trackingWatcher.suppressCalls).to.equal(1);
@@ -779,7 +781,7 @@ describe("MCP server handler response shaping", () => {
       const expected = syncAddonMetadata(tmp, { direction: "manifest-from-package", dryRun: true });
       expect("error" in expected, "expected a success result").to.equal(false);
       expect(previewResult.content[0].text).to.equal(
-        `${formatAddonMetadataSync(expected as AddonSyncResult)}\ntxId: 5`,
+        `${formatAddonMetadataSync(expected as AddonSyncResult)}\ntxId: default:5`,
       );
 
       // Both tools must render via the shared formatter — not hand-built strings.
@@ -1080,7 +1082,10 @@ describe("MCP server handler response shaping", () => {
       expect(handler).to.exist;
 
       __setExtractedDirty(true); // skip registry freshness scan
-      const result = (await handler({ recipe: VALID_RECIPE, txId: 5, regenerate: false }, makeExtra())) as any;
+      const result = (await handler(
+        { recipe: VALID_RECIPE, txId: "default:5", regenerate: false },
+        makeExtra(),
+      )) as any;
 
       expect(result.isError, result.content?.[0]?.text).to.be.undefined;
 

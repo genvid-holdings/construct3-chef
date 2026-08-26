@@ -63,6 +63,7 @@ import { OpsRegistry } from "./opsRegistry.js";
 import { ProjectContext, createProjectContext } from "./projectContext.js";
 import { ProjectRegistry } from "./projectRegistry.js";
 import { buildProjectRegistry } from "./launchConfig.js";
+import { compareTxToken, formatTxToken } from "./txToken.js";
 
 // Default single-project id and chef config, used only to seed the
 // module-level context synchronously at import time — before startServer
@@ -194,7 +195,7 @@ function readExtracted(ctx: ProjectContext, relPath: string): string | null {
   return fs.readFileSync(fullPath, "utf-8");
 }
 
-const txIdLine = (ctx: ProjectContext) => `txId: ${ctx.watcher.txId}`;
+const txIdLine = (ctx: ProjectContext) => `txId: ${formatTxToken(ctx.id, ctx.watcher.txId)}`;
 
 const STALE_WARNING = "\n\n[Warning: extracted files may be stale — run regenerate to refresh]";
 
@@ -896,7 +897,7 @@ reg(
 async function applyRecipeWithConcurrency(
   ctx: ProjectContext,
   recipe: Recipe,
-  opts: { expectedTxId?: number; regenerate?: boolean; label?: string },
+  opts: { expectedTxId?: string; regenerate?: boolean; label?: string },
   extra: Extra,
 ): Promise<CallToolResult> {
   return ctx.rwlock.write(
@@ -909,12 +910,8 @@ async function applyRecipeWithConcurrency(
         const shouldRegenerate = opts.regenerate !== false;
         const totalSteps = shouldRegenerate ? 7 : 1; // apply + 6 generators
         const { log, text } = bufferingLogger();
-        if (opts.expectedTxId !== undefined && opts.expectedTxId !== ctx.watcher.txId) {
-          return mcpError(
-            `State changed (expected ${opts.expectedTxId}, got ${ctx.watcher.txId}) — re-validate before applying`,
-            { extraLines: [txIdLine(ctx)] },
-          );
-        }
+        const txCheck = compareTxToken(ctx, opts.expectedTxId, "applying");
+        if (txCheck) return txCheck;
         const label = opts.label ?? "Applying recipe";
         // Suppress ctx.watcher during writes — we manage txId/ctx.extractedDirty ourselves
         await ctx.watcher.suppress(async () => {
@@ -954,7 +951,7 @@ reg(
     annotations: MUTATE,
     inputSchema: {
       recipe: z.string().describe("Recipe JSON string"),
-      txId: z.number().optional().describe("Expected txId from validate-recipe — if stale, apply is rejected"),
+      txId: z.string().optional().describe("Expected txId from validate-recipe — if stale, apply is rejected"),
       regenerate: z.boolean().optional().describe("Regenerate extracted/ files after applying (default: true)"),
     },
   },
@@ -1054,7 +1051,7 @@ reg(
       "Sync project.c3proj to match files on disk. Adds missing entries and removes stale ones. Stray files — files under a section root that are neither .json section items nor editor-local (e.g. layouts/notes.txt) — are reported detection-only; sync never acts on them. Pass txId for optimistic concurrency. Returns output and new txId.",
     annotations: MUTATE,
     inputSchema: {
-      txId: z.number().optional().describe("Expected txId — if stale, sync is rejected"),
+      txId: z.string().optional().describe("Expected txId — if stale, sync is rejected"),
     },
   },
   async ({ txId: expectedTxId }) =>
@@ -1062,12 +1059,8 @@ reg(
       withMcpErrors(
         async () => {
           const { log, text } = bufferingLogger();
-          if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
-            return mcpError(
-              `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before syncing`,
-              { extraLines: [txIdLine(ctx)] },
-            );
-          }
+          const txCheck = compareTxToken(ctx, expectedTxId, "syncing");
+          if (txCheck) return txCheck;
           // Suppress ctx.watcher — we manage txId ourselves
           await ctx.watcher.suppress(async () => {
             runSync(ctx.root, false, log);
@@ -1323,19 +1316,15 @@ reg(
     inputSchema: {
       direction: ADDON_METADATA_SYNC_DIRECTION_SCHEMA,
       addon: z.string().optional().describe("Scope to a single addon by discovered id. Omit to sync all."),
-      txId: z.number().optional().describe("Expected txId — if stale, sync is rejected"),
+      txId: z.string().optional().describe("Expected txId — if stale, sync is rejected"),
     },
   },
   async ({ direction, addon, txId: expectedTxId }) =>
     ctx.rwlock.write(
       withMcpErrors(
         async () => {
-          if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
-            return mcpError(
-              `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before syncing`,
-              { extraLines: [txIdLine(ctx)] },
-            );
-          }
+          const txCheck = compareTxToken(ctx, expectedTxId, "syncing");
+          if (txCheck) return txCheck;
 
           let result: ReturnType<typeof syncAddonMetadata> | undefined;
           // Suppress ctx.watcher — project.c3proj IS a watched target (sourceWatcher.ts
@@ -1447,7 +1436,7 @@ reg(
         .string()
         .describe("Relative output path within layouts/ for the new layout JSON (e.g. 'NewFeature/NewLayout.json')"),
       eventSheet: z.string().describe("Event sheet name for the new layout"),
-      txId: z.number().optional().describe("Expected txId — if stale, scaffold is rejected"),
+      txId: z.string().optional().describe("Expected txId — if stale, scaffold is rejected"),
       regenerate: z.boolean().optional().describe("Regenerate extracted/ files after scaffolding (default: true)"),
     },
   },
@@ -1458,12 +1447,8 @@ reg(
           const shouldRegenerate = regenerate !== false;
           const totalSteps = shouldRegenerate ? 8 : 2; // clone + sync + 6 generators
           const { log, text } = bufferingLogger();
-          if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
-            return mcpError(
-              `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before scaffolding`,
-              { extraLines: [txIdLine(ctx)] },
-            );
-          }
+          const txCheck = compareTxToken(ctx, expectedTxId, "scaffolding");
+          if (txCheck) return txCheck;
 
           const layoutsDir = ctx.project.layoutsDir;
 
@@ -1548,7 +1533,7 @@ reg(
     inputSchema: {
       source: z.string().describe("Source objectType name (e.g. 'StoryBookIcon')"),
       name: z.string().describe("Target objectType name (e.g. 'VideosIcon')"),
-      txId: z.number().optional().describe("Expected txId — if stale, scaffold is rejected"),
+      txId: z.string().optional().describe("Expected txId — if stale, scaffold is rejected"),
     },
   },
   async ({ source, name: targetName, txId: expectedTxId }) =>
@@ -1556,12 +1541,8 @@ reg(
       withMcpErrors(
         async () => {
           const { log, text } = bufferingLogger();
-          if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
-            return mcpError(
-              `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before scaffolding`,
-              { extraLines: [txIdLine(ctx)] },
-            );
-          }
+          const txCheck = compareTxToken(ctx, expectedTxId, "scaffolding");
+          if (txCheck) return txCheck;
 
           const objectTypesDir = ctx.project.objectTypesDir;
           const imagesDir = ctx.project.imagesDir;
@@ -1652,7 +1633,7 @@ reg(
 async function runWorkflowRecipe(
   ctx: ProjectContext,
   recipe: Recipe,
-  expectedTxId: number | undefined,
+  expectedTxId: string | undefined,
   regenerate: boolean | undefined,
   extra: Extra,
 ): Promise<CallToolResult> {
@@ -1662,14 +1643,8 @@ async function runWorkflowRecipe(
       const shouldRegenerate = regenerate !== false;
       const totalSteps = shouldRegenerate ? 7 : 1; // apply + 6 generators
       const { log, text } = bufferingLogger();
-      if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
-        return mcpError(
-          `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before applying`,
-          {
-            extraLines: [txIdLine(ctx)],
-          },
-        );
-      }
+      const txCheck = compareTxToken(ctx, expectedTxId, "applying");
+      if (txCheck) return txCheck;
       await ctx.watcher.suppress(async () => {
         await sendProgress(extra, 0, totalSteps, "Applying workflow");
         applyParsed(ctx.root, recipe, { regenerate: false, log });
@@ -1720,7 +1695,7 @@ reg(
         .record(z.boolean())
         .optional()
         .describe("Override inheritance flags forwarded to both templatize and replicify"),
-      txId: z.number().optional().describe("Expected txId — if stale, apply is rejected"),
+      txId: z.string().optional().describe("Expected txId — if stale, apply is rejected"),
       regenerate: z.boolean().optional().describe("Regenerate extracted/ after apply (default: true)"),
     },
   },
@@ -1772,7 +1747,7 @@ reg(
       type: z.string().describe("C3 object type of the instance to convert"),
       templateName: z.string().describe("Template name (globally unique across the project)"),
       inheritOverrides: z.record(z.boolean()).optional().describe("Override inheritance flags"),
-      txId: z.number().optional().describe("Expected txId — if stale, apply is rejected"),
+      txId: z.string().optional().describe("Expected txId — if stale, apply is rejected"),
       regenerate: z.boolean().optional().describe("Regenerate extracted/ after apply (default: true)"),
     },
   },
@@ -1815,7 +1790,7 @@ reg(
         )
         .min(1)
         .describe("One or more target layouts to add replicas to (distinct layout paths required)"),
-      txId: z.number().optional().describe("Expected txId — if stale, apply is rejected"),
+      txId: z.string().optional().describe("Expected txId — if stale, apply is rejected"),
       regenerate: z.boolean().optional().describe("Regenerate extracted/ after apply (default: true)"),
     },
   },
@@ -1856,7 +1831,7 @@ reg(
           "Restrict the replace to instances on this layer (throws if mismatched). When omitted, the instance's layer is auto-detected.",
         ),
       inheritOverrides: z.record(z.boolean()).optional().describe("Override inheritance flags"),
-      txId: z.number().optional().describe("Expected txId — if stale, apply is rejected"),
+      txId: z.string().optional().describe("Expected txId — if stale, apply is rejected"),
       regenerate: z.boolean().optional().describe("Regenerate extracted/ after apply (default: true)"),
     },
   },
@@ -1900,7 +1875,7 @@ reg(
         .boolean()
         .optional()
         .describe("Force removal even when the layer has instances (default: false)"),
-      txId: z.number().optional().describe("Expected txId — if stale, remove is rejected"),
+      txId: z.string().optional().describe("Expected txId — if stale, remove is rejected"),
       regenerate: z.boolean().optional().describe("Regenerate extracted/ files after removing (default: true)"),
     },
   },
@@ -1943,7 +1918,12 @@ reg(
   async () =>
     ctx.rwlock.read(async () => {
       return {
-        content: [{ type: "text", text: `txId: ${ctx.watcher.txId}\nextractedDirty: ${ctx.extractedDirty}` }],
+        content: [
+          {
+            type: "text",
+            text: `txId: ${formatTxToken(ctx.id, ctx.watcher.txId)}\nextractedDirty: ${ctx.extractedDirty}`,
+          },
+        ],
       };
     }),
 );

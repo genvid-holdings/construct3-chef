@@ -126,7 +126,24 @@ describe("txToken", () => {
       // the token format the ONLY observable change at those sites.
       for (const action of ["applying", "syncing", "scaffolding"]) {
         const text = errorText(compareTxToken(ctx, "alpha:5", action)!);
-        expect(text).to.equal(`State changed (expected alpha:5, got alpha:12) — re-validate before ${action}`);
+        // Assert the whole payload, not just the first line: every rejection also
+        // carries the current token as a footer, which is what each call site used
+        // to append by hand. Matching only the message would let that footer
+        // regress silently -- which is exactly how it was lost once already.
+        expect(text).to.equal(
+          `State changed (expected alpha:5, got alpha:12) — re-validate before ${action}\ntxId: alpha:12`,
+        );
+      }
+    });
+
+    it("carries the current token as a footer on every rejection path", () => {
+      withTxId(ctx, 12);
+      // Restores the pre-codec contract: each site rejected with
+      // `{ extraLines: [txIdLine(ctx)] }` so a client could re-validate straight
+      // away rather than making a second call to learn the value it was just
+      // rejected against.
+      for (const token of ["alpha:5", "beta:12", "not-a-token"]) {
+        expect(errorText(compareTxToken(ctx, token)!), `rejection for ${token}`).to.match(/\ntxId: alpha:12$/);
       }
     });
 

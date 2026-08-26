@@ -164,7 +164,7 @@ function parseRegistrations(src: string, callPattern: RegExp): McpTool[] {
  */
 function registeredMcpTools(): McpTool[] {
   return [
-    ...parseRegistrations(readFileSync(SERVER_PATH, "utf-8"), /\breg\(\s*\n\s*"([^"]+)"/g),
+    ...parseRegistrations(readFileSync(SERVER_PATH, "utf-8"), /\bregP?\(\s*\n\s*"([^"]+)"/g),
     ...parseRegistrations(readFileSync(OPS_REGISTRY_PATH, "utf-8"), /\bregisterTool\(\s*\n?\s*"([^"]+)"/g),
   ].sort((a, b) => a.name.localeCompare(b.name));
 }

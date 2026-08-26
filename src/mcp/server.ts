@@ -7,8 +7,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ReadWriteLock,
-  ExpectedChanges,
   OptimisticWatcher,
   paginatedContent,
   mcpContent,
@@ -29,13 +27,13 @@ import type { Logger } from "@genvidtech/mcp-utils";
 import { applyParsed } from "../c3/recipeApplier.js";
 import { writeSourceJson } from "../c3/sourceJson.js";
 import { validateRecipe, type Recipe } from "../c3/recipeInterpreter.js";
-import { GENERATORS, findJsonFiles, SID_SOURCE_DIRS } from "../c3/generators.js";
+import { findJsonFiles, SID_SOURCE_DIRS } from "../c3/generators.js";
 import { runSync, reportImageDrift, reportStrayFiles } from "../c3/projectSync.js";
 import { isEditorLocalPathUnder } from "../c3/editorLocal.js";
 import { readRegistryFile, mintUniqueSid } from "../c3/sidUtils.js";
 import { filterIndex, buildShallowSidMap, type SidMapEntry } from "../c3/dslFormatter.js";
-import { find_all_eventsheets_path, find_all_layouts_path, openProject } from "@genvidtech/c3source";
-import type { EventSheet, C3Project } from "@genvidtech/c3source";
+import { find_all_eventsheets_path, find_all_layouts_path } from "@genvidtech/c3source";
+import type { EventSheet } from "@genvidtech/c3source";
 import { resolveIncludeTree, formatIncludeTree, flattenIncludeTree } from "../c3/includeTree.js";
 import { collectAllUids, cloneLayout } from "../c3/layoutScaffold.js";
 import { search } from "../c3/search.js";
@@ -64,10 +62,18 @@ import { scanAddonUsage, formatAddonUsage } from "../c3/addonAceUsage.js";
 import { syncAddonMetadata, formatAddonMetadataSync } from "../c3/addonMetadataSync.js";
 import { lookup, formatLookupResult } from "../c3/aceLookup.js";
 import { OpsRegistry } from "./opsRegistry.js";
+import { ProjectContext, createProjectContext } from "./projectContext.js";
 
-let PROJECT_ROOT = process.cwd();
-let EXTRACTED_DIR = path.join(PROJECT_ROOT, "extracted");
-let PROJECT: C3Project = openProject(PROJECT_ROOT);
+// Default single-project id and chef config, used only to seed the
+// module-level context synchronously at import time — before startServer
+// resolves the real project root and awaits the real chef config. Mirrors
+// the synchronous defaults this file's pre-#95 module-level globals carried
+// before startServer ran (no async config load happened at module scope
+// either). Superseded by a real ProjectContext the moment startServer runs
+// (#95 — see ADR wiki/decisions/0034, and CLAUDE.md § "MCP server state
+// model").
+const DEFAULT_PROJECT_ID = "default";
+const DEFAULT_CHEF_CONFIG: ChefConfig = { extractedDir: "extracted", ops: { dir: "ops", watch: true } };
 
 const server = new McpServer(
   { name: "construct3-chef", version: "1.0.0" },
@@ -75,15 +81,18 @@ const server = new McpServer(
 );
 const __pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 exposeDocs(server, __pkgDir, { docsDir: "wiki", recursive: true });
-const rwlock = new ReadWriteLock();
 
 // ── Server State ─────────────────────────────────────────────────────────────
 
-let extractedDirty = false;
-// The OptimisticWatcher owns txId, the suppress window, and the file watchers.
-// Assigned in setupWatchers() (called from startServer) before any tool runs.
-let watcher!: OptimisticWatcher;
-const expectedChanges = new ExpectedChanges();
+// The single per-project state container (#95). Replaces the seven
+// module-level globals this file used to carry — see ProjectContext's own
+// docstring in projectContext.ts for the full list — with one object.
+// Reassigned wholesale — never field-by-field — in startServer and the
+// __setProjectRoot/__resetTestState test seams (ProjectContext's root/
+// extractedDir/project trio is getter-only precisely to prevent a
+// piecemeal reassignment going stale). `ctx.watcher` is assigned afterward, the
+// same two-step shape setupWatchers used before this context existed.
+let ctx: ProjectContext = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
 
 // Tool annotation presets (READ_ONLY / REGENERATE / MUTATE / NON_IDEMPOTENT_READ)
 // are imported from @genvidtech/mcp-utils. NON_IDEMPOTENT_READ marks tools that read
@@ -147,15 +156,6 @@ async function sendProgress(extra: Extra, progress: number, total: number, messa
   });
 }
 
-// Derived from the shared GENERATORS inventory. The `fn` closures must read
-// PROJECT_ROOT/EXTRACTED_DIR at call time (not capture them eagerly) — both
-// are module-level mutable and reassigned by startServer and the
-// __setProjectRoot/__resetTestState test seams.
-const GENERATOR_STEPS = GENERATORS.map((g) => ({
-  name: g.label,
-  fn: (log: Logger) => g.run(PROJECT_ROOT, EXTRACTED_DIR, log),
-}));
-
 class CancelledError extends Error {
   constructor() {
     super("Cancelled");
@@ -167,42 +167,48 @@ function checkCancelled(extra?: Extra): void {
   if (extra?.signal?.aborted) throw new CancelledError();
 }
 
-async function runGenerators(log: Logger, extra?: Extra, progressOffset = 0, progressTotal = 6): Promise<void> {
-  for (let i = 0; i < GENERATOR_STEPS.length; i++) {
+async function runGenerators(
+  ctx: ProjectContext,
+  log: Logger,
+  extra?: Extra,
+  progressOffset = 0,
+  progressTotal = 6,
+): Promise<void> {
+  for (let i = 0; i < ctx.generatorSteps.length; i++) {
     checkCancelled(extra);
-    if (extra) await sendProgress(extra, progressOffset + i, progressTotal, GENERATOR_STEPS[i].name);
-    GENERATOR_STEPS[i].fn(log);
+    if (extra) await sendProgress(extra, progressOffset + i, progressTotal, ctx.generatorSteps[i].name);
+    ctx.generatorSteps[i].fn(log);
   }
-  if (extra) await sendProgress(extra, progressOffset + GENERATOR_STEPS.length, progressTotal, "Done");
+  if (extra) await sendProgress(extra, progressOffset + ctx.generatorSteps.length, progressTotal, "Done");
 }
 
-function readExtracted(relPath: string): string | null {
-  const fullPath = resolveWithin(EXTRACTED_DIR, relPath);
+function readExtracted(ctx: ProjectContext, relPath: string): string | null {
+  const fullPath = resolveWithin(ctx.extractedDir, relPath);
   if (fullPath === null) return null;
   if (!fs.existsSync(fullPath)) return null;
   return fs.readFileSync(fullPath, "utf-8");
 }
 
-const txIdLine = () => `txId: ${watcher.txId}`;
+const txIdLine = (ctx: ProjectContext) => `txId: ${ctx.watcher.txId}`;
 
 const STALE_WARNING = "\n\n[Warning: extracted files may be stale — run regenerate to refresh]";
 
-function appendStaleWarning(text: string): string {
-  return extractedDirty ? text + STALE_WARNING : text;
+function appendStaleWarning(ctx: ProjectContext, text: string): string {
+  return ctx.extractedDirty ? text + STALE_WARNING : text;
 }
 
 /**
  * Compare source file mtime against extracted file mtime.
- * If source is newer and extractedDirty is not already set, mark state as dirty.
+ * If source is newer and ctx.extractedDirty is not already set, mark state as dirty.
  * No-ops silently if either file is missing (tolerant of partial states).
  */
-function checkSourceFreshness(sourcePath: string, extractedPath: string): void {
+function checkSourceFreshness(ctx: ProjectContext, sourcePath: string, extractedPath: string): void {
   try {
     const sourceMtime = fs.statSync(sourcePath).mtimeMs;
     const extractedMtime = fs.statSync(extractedPath).mtimeMs;
-    if (sourceMtime > extractedMtime && !extractedDirty) {
-      extractedDirty = true;
-      watcher.bump();
+    if (sourceMtime > extractedMtime && !ctx.extractedDirty) {
+      ctx.extractedDirty = true;
+      ctx.watcher.bump();
       emitLog("warning", `Stale detected: source newer than extracted (${path.basename(sourcePath)})`);
     }
   } catch {
@@ -214,13 +220,13 @@ function checkSourceFreshness(sourcePath: string, extractedPath: string): void {
  * Multi-source variant of checkSourceFreshness for `sid-registry.txt`, which is
  * derived from many source files (eventSheets/, layouts/, objectTypes/).
  * Walks each source dir, finds the newest JSON mtime, compares against the
- * registry mtime, and marks `extractedDirty` if any source is newer.
+ * registry mtime, and marks `ctx.extractedDirty` if any source is newer.
  *
  * This catches external edits (git checkout, atomic-rename saves, network mounts)
- * that the fs.watch watcher may have missed before the watcher event delivers.
+ * that the underlying fs.watch mechanism may have missed, or hasn't yet delivered.
  */
-function checkRegistryFreshness(registryPath: string): void {
-  if (extractedDirty) return; // Already known stale; skip the scan.
+function checkRegistryFreshness(ctx: ProjectContext, registryPath: string): void {
+  if (ctx.extractedDirty) return; // Already known stale; skip the scan.
   let registryMtime: number;
   try {
     registryMtime = fs.statSync(registryPath).mtimeMs;
@@ -231,7 +237,7 @@ function checkRegistryFreshness(registryPath: string): void {
   for (const dir of SID_SOURCE_DIRS) {
     let files: string[];
     try {
-      files = findJsonFiles(path.join(PROJECT_ROOT, dir));
+      files = findJsonFiles(path.join(ctx.root, dir));
     } catch {
       continue; // Directory vanished mid-walk — try the next dir.
     }
@@ -240,7 +246,7 @@ function checkRegistryFreshness(registryPath: string): void {
     // registry this scan checks freshness against, so including them here
     // would compare against files the registry never contained. See ADR
     // wiki/decisions/0018-editor-local-writes-are-not-source-changes.md.
-    for (const file of files.filter((f) => !isEditorLocalPathUnder(PROJECT_ROOT, f))) {
+    for (const file of files.filter((f) => !isEditorLocalPathUnder(ctx.root, f))) {
       try {
         const m = fs.statSync(file).mtimeMs;
         if (m > newestSourceMtime) newestSourceMtime = m;
@@ -252,8 +258,8 @@ function checkRegistryFreshness(registryPath: string): void {
     }
   }
   if (newestSourceMtime > registryMtime) {
-    extractedDirty = true;
-    watcher.bump();
+    ctx.extractedDirty = true;
+    ctx.watcher.bump();
     emitLog("warning", "Stale detected: source newer than sid-registry.txt");
   }
 }
@@ -264,6 +270,7 @@ const PAGINATION_PARAMS = {
 };
 
 function paginatedResponse(
+  ctx: ProjectContext,
   text: string,
   offset: number | undefined,
   limit: number | undefined,
@@ -271,7 +278,7 @@ function paginatedResponse(
 ): CallToolResult {
   const result = paginatedContent(text, { offset, limit });
   const pageText = (result.content[0] as { text: string }).text;
-  const finalText = opts?.stale === false ? pageText : appendStaleWarning(pageText);
+  const finalText = opts?.stale === false ? pageText : appendStaleWarning(ctx, pageText);
   return { content: [{ type: "text" as const, text: finalText }] };
 }
 
@@ -308,22 +315,22 @@ export function renderEventSidRows(entries: SidMapEntry[], grep?: string): strin
 
 // ── File Watchers ────────────────────────────────────────────────────────────
 
-function setupWatchers(): void {
-  watcher = createSourceWatcher({
-    projectRoot: PROJECT_ROOT,
-    expected: expectedChanges,
+function setupWatchers(ctx: ProjectContext): void {
+  ctx.watcher = createSourceWatcher({
+    projectRoot: ctx.root,
+    expected: ctx.expected,
     // External source-dir edit → mark extracted/ stale (txId already bumped by
-    // the watcher). project.c3proj edits bump txId only (handled inside
+    // the ctx.watcher). project.c3proj edits bump txId only (handled inside
     // createSourceWatcher), so they don't reach here.
     onSourceChange: (filePath) => {
-      extractedDirty = true;
-      emitLog("warning", `External change detected: ${filePath} (txId → ${watcher.txId})`);
+      ctx.extractedDirty = true;
+      emitLog("warning", `External change detected: ${filePath} (txId → ${ctx.watcher.txId})`);
     },
   });
-  watcher.start();
+  ctx.watcher.start();
 
-  // Periodically purge expired entries from expectedChanges
-  setInterval(() => expectedChanges.purgeExpired(), 30_000).unref();
+  // Periodically purge expired entries from ctx.expected
+  setInterval(() => ctx.expected.purgeExpired(), 30_000).unref();
 }
 
 // ── Listing Tools ─────────────────────────────────────────────────────────────
@@ -338,9 +345,9 @@ reg(
     inputSchema: { ...PAGINATION_PARAMS },
   },
   async ({ offset, limit }) =>
-    rwlock.read(async () => {
-      const sheets = toSortedRelative(PROJECT.findAllEventSheets(), PROJECT.eventSheetsDir);
-      return paginatedResponse(sheets.join("\n"), offset, limit, { stale: false });
+    ctx.rwlock.read(async () => {
+      const sheets = toSortedRelative(ctx.project.findAllEventSheets(), ctx.project.eventSheetsDir);
+      return paginatedResponse(ctx, sheets.join("\n"), offset, limit, { stale: false });
     }),
 );
 
@@ -354,9 +361,9 @@ reg(
     inputSchema: { ...PAGINATION_PARAMS },
   },
   async ({ offset, limit }) =>
-    rwlock.read(async () => {
-      const layouts = toSortedRelative(PROJECT.findAllLayouts(), PROJECT.layoutsDir);
-      return paginatedResponse(layouts.join("\n"), offset, limit, { stale: false });
+    ctx.rwlock.read(async () => {
+      const layouts = toSortedRelative(ctx.project.findAllLayouts(), ctx.project.layoutsDir);
+      return paginatedResponse(ctx, layouts.join("\n"), offset, limit, { stale: false });
     }),
 );
 
@@ -370,14 +377,14 @@ reg(
     inputSchema: { ...PAGINATION_PARAMS },
   },
   async ({ offset, limit }) =>
-    rwlock.read(async () => {
-      const text = readExtracted("global-layers.txt");
+    ctx.rwlock.read(async () => {
+      const text = readExtracted(ctx, "global-layers.txt");
       if (text === null) {
         return mcpError("global-layers.txt not found. Run 'regenerate' to generate it.", {
           prefix: "list-global-layers:",
         });
       }
-      return paginatedResponse(text, offset, limit);
+      return paginatedResponse(ctx, text, offset, limit);
     }),
 );
 
@@ -397,17 +404,17 @@ reg(
     },
   },
   async ({ format, offset, limit }) =>
-    rwlock.read(async () => {
-      const config = await loadChefConfig(PROJECT_ROOT);
-      const layoutEventSheetMap = buildLayoutEventSheetMap(PROJECT.layoutsDir);
+    ctx.rwlock.read(async () => {
+      const config = await loadChefConfig(ctx.root);
+      const layoutEventSheetMap = buildLayoutEventSheetMap(ctx.project.layoutsDir);
       const sheetToLayout: Record<string, string> = {};
       for (const [layoutName, sheetName] of Object.entries(layoutEventSheetMap)) {
         sheetToLayout[sheetName] = layoutName;
       }
-      const navEntries = findGoToLayoutCalls(EXTRACTED_DIR, resolveNavConvention(config));
+      const navEntries = findGoToLayoutCalls(ctx.extractedDir, resolveNavConvention(config));
       const text =
         format === "plantuml" ? generatePlantUML(navEntries, sheetToLayout) : formatNavTable(navEntries, sheetToLayout);
-      return paginatedResponse(text, offset, limit);
+      return paginatedResponse(ctx, text, offset, limit);
     }),
 );
 
@@ -426,18 +433,19 @@ reg(
     },
   },
   async ({ sheet, offset, limit }) =>
-    rwlock.read(async () => {
+    ctx.rwlock.read(async () => {
       checkSourceFreshness(
-        path.join(PROJECT.eventSheetsDir, `${sheet}.json`),
-        path.join(EXTRACTED_DIR, "eventSheets", `${sheet}.dsl.txt`),
+        ctx,
+        path.join(ctx.project.eventSheetsDir, `${sheet}.json`),
+        path.join(ctx.extractedDir, "eventSheets", `${sheet}.dsl.txt`),
       );
-      const text = readExtracted(`eventSheets/${sheet}.dsl.txt`);
+      const text = readExtracted(ctx, `eventSheets/${sheet}.dsl.txt`);
       if (text === null) {
         return mcpError(`No DSL file found for '${sheet}'. Use list-event-sheets to see available sheets.`, {
           prefix: "read-dsl:",
         });
       }
-      return paginatedResponse(text, offset, limit);
+      return paginatedResponse(ctx, text, offset, limit);
     }),
 );
 
@@ -458,12 +466,13 @@ reg(
     },
   },
   async ({ sheet, grep, offset, limit }) =>
-    rwlock.read(async () => {
+    ctx.rwlock.read(async () => {
       checkSourceFreshness(
-        path.join(PROJECT.eventSheetsDir, `${sheet}.json`),
-        path.join(EXTRACTED_DIR, "eventSheets", `${sheet}.dsl.idx.txt`),
+        ctx,
+        path.join(ctx.project.eventSheetsDir, `${sheet}.json`),
+        path.join(ctx.extractedDir, "eventSheets", `${sheet}.dsl.idx.txt`),
       );
-      let text = readExtracted(`eventSheets/${sheet}.dsl.idx.txt`);
+      let text = readExtracted(ctx, `eventSheets/${sheet}.dsl.idx.txt`);
       if (text === null) {
         return mcpError(`No DSL index file found for '${sheet}'. Use list-event-sheets to see available sheets.`, {
           prefix: "read-dsl-index:",
@@ -472,7 +481,7 @@ reg(
       if (grep) {
         text = filterIndex(text, grep);
       }
-      return paginatedResponse(text, offset, limit);
+      return paginatedResponse(ctx, text, offset, limit);
     }),
 );
 
@@ -496,8 +505,8 @@ reg(
     },
   },
   async ({ sheet, grep }) =>
-    rwlock.read(async () => {
-      const sourcePath = path.join(PROJECT.eventSheetsDir, `${sheet}.json`);
+    ctx.rwlock.read(async () => {
+      const sourcePath = path.join(ctx.project.eventSheetsDir, `${sheet}.json`);
       if (!fs.existsSync(sourcePath)) {
         return mcpError(`No event sheet found for '${sheet}'. Use list-event-sheets to see available sheets.`, {
           prefix: "read-event-sids:",
@@ -534,12 +543,13 @@ reg(
     },
   },
   async ({ sheet, offset, limit }) =>
-    rwlock.read(async () => {
+    ctx.rwlock.read(async () => {
       checkSourceFreshness(
-        path.join(PROJECT.eventSheetsDir, `${sheet}.json`),
-        path.join(EXTRACTED_DIR, "eventSheets", `${sheet}.ts`),
+        ctx,
+        path.join(ctx.project.eventSheetsDir, `${sheet}.json`),
+        path.join(ctx.extractedDir, "eventSheets", `${sheet}.ts`),
       );
-      const text = readExtracted(`eventSheets/${sheet}.ts`);
+      const text = readExtracted(ctx, `eventSheets/${sheet}.ts`);
       if (text === null) {
         return mcpError(
           `No extracted TypeScript found for '${sheet}'. Use list-event-sheets to see available sheets.`,
@@ -548,7 +558,7 @@ reg(
           },
         );
       }
-      return paginatedResponse(text, offset, limit);
+      return paginatedResponse(ctx, text, offset, limit);
     }),
 );
 
@@ -565,18 +575,19 @@ reg(
     },
   },
   async ({ layout, offset, limit }) =>
-    rwlock.read(async () => {
+    ctx.rwlock.read(async () => {
       checkSourceFreshness(
-        path.join(PROJECT.layoutsDir, `${layout}.json`),
-        path.join(EXTRACTED_DIR, "layouts", `${layout}.layout.txt`),
+        ctx,
+        path.join(ctx.project.layoutsDir, `${layout}.json`),
+        path.join(ctx.extractedDir, "layouts", `${layout}.layout.txt`),
       );
-      const text = readExtracted(`layouts/${layout}.layout.txt`);
+      const text = readExtracted(ctx, `layouts/${layout}.layout.txt`);
       if (text === null) {
         return mcpError(`No layout summary found for '${layout}'. Use list-layouts to see available layouts.`, {
           prefix: "read-layout:",
         });
       }
-      return paginatedResponse(text, offset, limit);
+      return paginatedResponse(ctx, text, offset, limit);
     }),
 );
 
@@ -592,14 +603,14 @@ reg(
     inputSchema: { ...PAGINATION_PARAMS },
   },
   async ({ offset, limit }) =>
-    rwlock.read(async () => {
-      const text = readExtracted("template-scope.txt");
+    ctx.rwlock.read(async () => {
+      const text = readExtracted(ctx, "template-scope.txt");
       if (text === null) {
         return mcpError("template-scope.txt not found. Run 'npm run generate-c3' to generate it.", {
           prefix: "read-template-scope:",
         });
       }
-      return paginatedResponse(text, offset, limit);
+      return paginatedResponse(ctx, text, offset, limit);
     }),
 );
 
@@ -613,14 +624,14 @@ reg(
     inputSchema: { ...PAGINATION_PARAMS },
   },
   async ({ offset, limit }) =>
-    rwlock.read(async () => {
-      const text = readExtracted("sid-registry.txt");
+    ctx.rwlock.read(async () => {
+      const text = readExtracted(ctx, "sid-registry.txt");
       if (text === null) {
         return mcpError("sid-registry.txt not found. Run 'npm run generate-c3' to generate it.", {
           prefix: "read-sid-registry:",
         });
       }
-      return paginatedResponse(text, offset, limit);
+      return paginatedResponse(ctx, text, offset, limit);
     }),
 );
 
@@ -646,27 +657,27 @@ reg(
     },
   },
   // Takes the WRITE lock — not because source files change (they don't), but because
-  // (a) `checkRegistryFreshness` mutates module-level `extractedDirty` and `txId`, and
+  // (a) `checkRegistryFreshness` mutates the context's `ctx.extractedDirty` and `txId`, and
   // (b) two concurrent generate-sids calls each building their own local `used` Set
   // could mint identical SIDs (negligible probability ~1/9e14 per pair, but the
   // architectural contract "SIDs don't collide with each other" should hold across
-  // concurrent callers). Serializing with `rwlock.write()` makes both rigorous.
-  // The NON_IDEMPOTENT_READ annotation describes the tool's effect on PROJECT state
+  // concurrent callers). Serializing with `ctx.rwlock.write()` makes both rigorous.
+  // The NON_IDEMPOTENT_READ annotation describes the tool's effect on project state
   // (none — source files unchanged); the write lock is internal-state safety.
   async ({ count = 1, extraUsedSids }) =>
-    rwlock.write(
+    ctx.rwlock.write(
       withMcpErrors(
         async () => {
-          const registryPath = path.join(EXTRACTED_DIR, "sid-registry.txt");
+          const registryPath = path.join(ctx.extractedDir, "sid-registry.txt");
           if (!fs.existsSync(registryPath)) {
             return mcpError("sid-registry.txt not found. Run 'regenerate' first.", { prefix: "generate-sids:" });
           }
-          checkRegistryFreshness(registryPath);
+          checkRegistryFreshness(ctx, registryPath);
           const used = readRegistryFile(registryPath);
           if (extraUsedSids) for (const s of extraUsedSids) used.add(s);
           const sids = Array.from({ length: count }, () => mintUniqueSid(used));
           const header = `# Generated ${count} SID${count === 1 ? "" : "s"}:`;
-          const text = appendStaleWarning(`${header}\n${sids.join("\n")}`);
+          const text = appendStaleWarning(ctx, `${header}\n${sids.join("\n")}`);
           return { content: [{ type: "text", text }] };
         },
         { prefix: "generate-sids:" },
@@ -693,8 +704,8 @@ reg(
     },
   },
   async ({ path: sheetPath, functions: includeFunctions, flat }) =>
-    rwlock.read(async () => {
-      const tree = resolveIncludeTree(sheetPath, PROJECT_ROOT, { includeFunctions: includeFunctions ?? false });
+    ctx.rwlock.read(async () => {
+      const tree = resolveIncludeTree(sheetPath, ctx.root, { includeFunctions: includeFunctions ?? false });
 
       if (flat) {
         const names = flattenIncludeTree(tree);
@@ -729,7 +740,7 @@ reg(
     },
   },
   async ({ pattern, type, path: searchPath, context }) =>
-    rwlock.read(
+    ctx.rwlock.read(
       withMcpErrors(
         async () => {
           if (!pattern) {
@@ -737,7 +748,7 @@ reg(
           }
 
           const result = search(
-            { projectRoot: PROJECT_ROOT, extractedDir: EXTRACTED_DIR },
+            { projectRoot: ctx.root, extractedDir: ctx.extractedDir },
             { pattern, type, path: searchPath, context },
           );
 
@@ -750,7 +761,7 @@ reg(
             text += `\n\n[Truncated: showing first 1000 matches. Narrow your pattern or path to see more.]`;
           }
           if (result.isExtracted) {
-            text = appendStaleWarning(text);
+            text = appendStaleWarning(ctx, text);
           }
 
           emitLog(
@@ -781,12 +792,13 @@ reg(
     },
   },
   async ({ sheet, by, value }) =>
-    rwlock.read(async () => {
+    ctx.rwlock.read(async () => {
       checkSourceFreshness(
-        path.join(PROJECT.eventSheetsDir, `${sheet}.json`),
-        path.join(EXTRACTED_DIR, "eventSheets", `${sheet}.dsl.idx.txt`),
+        ctx,
+        path.join(ctx.project.eventSheetsDir, `${sheet}.json`),
+        path.join(ctx.extractedDir, "eventSheets", `${sheet}.dsl.idx.txt`),
       );
-      const text = readExtracted(`eventSheets/${sheet}.dsl.idx.txt`);
+      const text = readExtracted(ctx, `eventSheets/${sheet}.dsl.idx.txt`);
       if (text === null) {
         return mcpError(`No DSL index file found for '${sheet}'. Use list-event-sheets to see available sheets.`, {
           prefix: "resolve-anchor:",
@@ -830,7 +842,7 @@ reg(
         }
       }
 
-      return { content: [{ type: "text", text: appendStaleWarning(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: appendStaleWarning(ctx, lines.join("\n")) }] };
     }),
 );
 
@@ -848,23 +860,23 @@ reg(
     },
   },
   async ({ recipe: recipeJson }) =>
-    rwlock.read(
+    ctx.rwlock.read(
       withMcpErrors(
         async () => {
-          // Refresh extractedDirty so the returned txId reflects any external edits
-          // the file watcher may have missed (atomic-rename, git checkout, network mounts).
+          // Refresh ctx.extractedDirty so the returned txId reflects any external edits
+          // the file ctx.watcher may have missed (atomic-rename, git checkout, network mounts).
           // This matters: apply-recipe's optimistic-concurrency check uses our returned txId.
-          checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
+          checkRegistryFreshness(ctx, path.join(ctx.extractedDir, "sid-registry.txt"));
           const { log, text } = bufferingLogger();
           const recipe: Recipe = JSON.parse(recipeJson);
           const errors = validateRecipe(recipe);
           if (errors.length > 0) {
-            return mcpError(`Validation errors:\n${errors.join("\n")}`, { extraLines: [txIdLine()] });
+            return mcpError(`Validation errors:\n${errors.join("\n")}`, { extraLines: [txIdLine(ctx)] });
           }
-          applyParsed(PROJECT_ROOT, recipe, { dryRun: true, log });
-          return mcpContent(text(), txIdLine());
+          applyParsed(ctx.root, recipe, { dryRun: true, log });
+          return mcpContent(text(), txIdLine(ctx));
         },
-        { prefix: "Error:", extraLines: () => [txIdLine()] },
+        { prefix: "Error:", extraLines: () => [txIdLine(ctx)] },
       ),
     ),
 );
@@ -872,56 +884,57 @@ reg(
 /**
  * Core apply orchestration: parse-already-done recipe → write lock → apply →
  * optionally regenerate. Encapsulates concurrency boilerplate so op-<name>
- * tools can reuse the exact same flow without duplicating rwlock/watcher logic.
+ * tools can reuse the exact same flow without duplicating ctx.rwlock/ctx.watcher logic.
  *
  * Module-internal — NOT exported on the public barrel.
  */
 async function applyRecipeWithConcurrency(
+  ctx: ProjectContext,
   recipe: Recipe,
   opts: { expectedTxId?: number; regenerate?: boolean; label?: string },
   extra: Extra,
 ): Promise<CallToolResult> {
-  return rwlock.write(
+  return ctx.rwlock.write(
     withMcpErrors(
       async () => {
-        // Refresh extractedDirty before the txId check — catches external edits the
-        // file watcher may have missed, so a stale registry doesn't seed `mintUniqueSid`
+        // Refresh ctx.extractedDirty before the txId check — catches external edits the
+        // file ctx.watcher may have missed, so a stale registry doesn't seed `mintUniqueSid`
         // with SIDs that already exist on disk.
-        checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
+        checkRegistryFreshness(ctx, path.join(ctx.extractedDir, "sid-registry.txt"));
         const shouldRegenerate = opts.regenerate !== false;
         const totalSteps = shouldRegenerate ? 7 : 1; // apply + 6 generators
         const { log, text } = bufferingLogger();
-        if (opts.expectedTxId !== undefined && opts.expectedTxId !== watcher.txId) {
+        if (opts.expectedTxId !== undefined && opts.expectedTxId !== ctx.watcher.txId) {
           return mcpError(
-            `State changed (expected ${opts.expectedTxId}, got ${watcher.txId}) — re-validate before applying`,
-            { extraLines: [txIdLine()] },
+            `State changed (expected ${opts.expectedTxId}, got ${ctx.watcher.txId}) — re-validate before applying`,
+            { extraLines: [txIdLine(ctx)] },
           );
         }
         const label = opts.label ?? "Applying recipe";
-        // Suppress watcher during writes — we manage txId/extractedDirty ourselves
-        await watcher.suppress(async () => {
+        // Suppress ctx.watcher during writes — we manage txId/ctx.extractedDirty ourselves
+        await ctx.watcher.suppress(async () => {
           await sendProgress(extra, 0, totalSteps, label);
-          applyParsed(PROJECT_ROOT, recipe, { regenerate: false, log });
+          applyParsed(ctx.root, recipe, { regenerate: false, log });
           if (shouldRegenerate) {
-            await runGenerators(log, extra, 1, totalSteps);
+            await runGenerators(ctx, log, extra, 1, totalSteps);
           }
         });
-        watcher.bump();
+        ctx.watcher.bump();
         if (shouldRegenerate) {
-          extractedDirty = false;
+          ctx.extractedDirty = false;
         }
-        return mcpContent(text(), txIdLine());
+        return mcpContent(text(), txIdLine(ctx));
       },
       {
         prefix: "Error:",
         onError: (e) => {
           if (e instanceof CancelledError) {
             // Recipe already applied (source files modified) but regeneration interrupted
-            watcher.bump();
-            extractedDirty = true;
+            ctx.watcher.bump();
+            ctx.extractedDirty = true;
           }
         },
-        extraLines: () => [txIdLine()],
+        extraLines: () => [txIdLine(ctx)],
       },
     ),
   );
@@ -945,9 +958,9 @@ reg(
     try {
       recipe = JSON.parse(recipeJson);
     } catch (e) {
-      return mcpError(e, { prefix: "Error:", extraLines: [txIdLine()] });
+      return mcpError(e, { prefix: "Error:", extraLines: [txIdLine(ctx)] });
     }
-    return applyRecipeWithConcurrency(recipe, { expectedTxId, regenerate }, extra);
+    return applyRecipeWithConcurrency(ctx, recipe, { expectedTxId, regenerate }, extra);
   },
 );
 
@@ -963,23 +976,23 @@ reg(
     inputSchema: {},
   },
   async (_args: Record<string, never>, extra: Extra) =>
-    rwlock.write(
+    ctx.rwlock.write(
       withMcpErrors(
         async () => {
           const { log, text } = bufferingLogger();
-          // Suppress watcher — regenerate writes only to extracted/ (derived output)
-          await watcher.suppress(async () => {
-            await runGenerators(log, extra);
+          // Suppress ctx.watcher — regenerate writes only to extracted/ (derived output)
+          await ctx.watcher.suppress(async () => {
+            await runGenerators(ctx, log, extra);
           });
-          extractedDirty = false;
+          ctx.extractedDirty = false;
           return mcpContent(text());
         },
         {
           prefix: "Error:",
           onError: (e) => {
             if (e instanceof CancelledError) {
-              // Partially regenerated — stale. No watcher.bump() (regenerate doesn't modify source files)
-              extractedDirty = true;
+              // Partially regenerated — stale. No ctx.watcher.bump() (regenerate doesn't modify source files)
+              ctx.extractedDirty = true;
             }
           },
         },
@@ -999,7 +1012,7 @@ reg(
     inputSchema: {},
   },
   async () =>
-    rwlock.read(
+    ctx.rwlock.read(
       withMcpErrors(
         async () => {
           const { log, text } = bufferingLogger();
@@ -1010,20 +1023,20 @@ reg(
           // the three rows in syncC3Proj.test.ts that pin it, stay untouched.
           let failure: unknown;
           try {
-            runSync(PROJECT_ROOT, true, log);
+            runSync(ctx.root, true, log);
           } catch (err) {
             failure = err;
           }
-          reportImageDrift(PROJECT_ROOT, log);
-          reportStrayFiles(PROJECT_ROOT, log);
+          reportImageDrift(ctx.root, log);
+          reportStrayFiles(ctx.root, log);
           if (failure !== undefined) {
             // The response stays isError — the tool DID fail. The diagnostics ride
             // along rather than converting a real failure into a success response.
-            return mcpError(failure, { prefix: "Error:", extraLines: [text(), txIdLine()] });
+            return mcpError(failure, { prefix: "Error:", extraLines: [text(), txIdLine(ctx)] });
           }
-          return mcpContent(text(), txIdLine());
+          return mcpContent(text(), txIdLine(ctx));
         },
-        { prefix: "Error:", extraLines: () => [txIdLine()] },
+        { prefix: "Error:", extraLines: () => [txIdLine(ctx)] },
       ),
     ),
 );
@@ -1040,29 +1053,29 @@ reg(
     },
   },
   async ({ txId: expectedTxId }) =>
-    rwlock.write(
+    ctx.rwlock.write(
       withMcpErrors(
         async () => {
           const { log, text } = bufferingLogger();
-          if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
+          if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
             return mcpError(
-              `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before syncing`,
-              { extraLines: [txIdLine()] },
+              `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before syncing`,
+              { extraLines: [txIdLine(ctx)] },
             );
           }
-          // Suppress watcher — we manage txId ourselves
-          await watcher.suppress(async () => {
-            runSync(PROJECT_ROOT, false, log);
+          // Suppress ctx.watcher — we manage txId ourselves
+          await ctx.watcher.suppress(async () => {
+            runSync(ctx.root, false, log);
           });
-          watcher.bump();
+          ctx.watcher.bump();
           // Detection-only: images aren't a manifest section so sync can't act on
           // image drift, but surface it (read-only) so a direct sync still shows it,
           // mirroring validate-project (#52).
-          reportImageDrift(PROJECT_ROOT, log);
-          reportStrayFiles(PROJECT_ROOT, log);
-          return mcpContent(text(), txIdLine());
+          reportImageDrift(ctx.root, log);
+          reportStrayFiles(ctx.root, log);
+          return mcpContent(text(), txIdLine(ctx));
         },
-        { prefix: "Error:", extraLines: () => [txIdLine()] },
+        { prefix: "Error:", extraLines: () => [txIdLine(ctx)] },
       ),
     ),
 );
@@ -1082,17 +1095,17 @@ reg(
     },
   },
   async ({ name, file }) =>
-    rwlock.read(
+    ctx.rwlock.read(
       withMcpErrors(
         async () => {
           if (!name) {
             // formatAddonList owns the empty case ("No addons found."), so the
             // CLI and MCP list output stays byte-identical.
-            return mcpContent(formatAddonList(discoverAddons(PROJECT_ROOT)));
+            return mcpContent(formatAddonList(discoverAddons(ctx.root)));
           }
 
           if (!file) {
-            const info = readAddon(PROJECT_ROOT, name);
+            const info = readAddon(ctx.root, name);
             if (info === null) {
               return mcpError(`Addon '${name}' not found`, { prefix: "read-addon:" });
             }
@@ -1112,7 +1125,7 @@ reg(
             });
           }
 
-          const addon = discoverAddons(PROJECT_ROOT).find((a) => a.name === name);
+          const addon = discoverAddons(ctx.root).find((a) => a.name === name);
           if (addon === undefined) {
             return mcpError(`Addon '${name}' not found`, { prefix: "read-addon:" });
           }
@@ -1146,7 +1159,7 @@ reg(
     },
   },
   async ({ addon }) =>
-    rwlock.read(
+    ctx.rwlock.read(
       withMcpErrors(
         async () => {
           let result;
@@ -1156,17 +1169,17 @@ reg(
                 prefix: "validate-addons:",
               });
             }
-            const target = resolveAddonTarget(PROJECT_ROOT, addon);
+            const target = resolveAddonTarget(ctx.root, addon);
             if (target === null) {
               return mcpError(`Addon '${addon}' not found`, { prefix: "validate-addons:" });
             }
-            result = validateAddons(PROJECT_ROOT, target);
+            result = validateAddons(ctx.root, target);
           } else {
-            result = validateAddons(PROJECT_ROOT);
+            result = validateAddons(ctx.root);
           }
-          return mcpContent(formatAddonValidation(result), txIdLine());
+          return mcpContent(formatAddonValidation(result), txIdLine(ctx));
         },
-        { prefix: "validate-addons:", extraLines: () => [txIdLine()] },
+        { prefix: "validate-addons:", extraLines: () => [txIdLine(ctx)] },
       ),
     ),
 );
@@ -1181,10 +1194,10 @@ reg(
     inputSchema: {},
   },
   async () =>
-    rwlock.read(
-      withMcpErrors(async () => mcpContent(formatAddonInventory(listAddons(PROJECT_ROOT)), txIdLine()), {
+    ctx.rwlock.read(
+      withMcpErrors(async () => mcpContent(formatAddonInventory(listAddons(ctx.root)), txIdLine(ctx)), {
         prefix: "list-addons:",
-        extraLines: () => [txIdLine()],
+        extraLines: () => [txIdLine(ctx)],
       }),
     ),
 );
@@ -1209,12 +1222,12 @@ reg(
   // internally. No txId footer either — addon packages aren't tx-tracked
   // (not in SOURCE_DIRS, not project.c3proj), same as read-addon.
   async ({ from, to }) =>
-    rwlock.read(
+    ctx.rwlock.read(
       withMcpErrors(
         async () => {
-          const a = resolveAceSource(PROJECT_ROOT, from);
+          const a = resolveAceSource(ctx.root, from);
           if ("error" in a) return mcpError(a.error, { prefix: "diff-addon-aces:" });
-          const b = resolveAceSource(PROJECT_ROOT, to);
+          const b = resolveAceSource(ctx.root, to);
           if ("error" in b) return mcpError(b.error, { prefix: "diff-addon-aces:" });
           return mcpContent(formatAceDiff(diffAddonAces(a.aces, b.aces), a.label, b.label));
         },
@@ -1243,10 +1256,10 @@ reg(
     },
   },
   async ({ addon, from }) =>
-    rwlock.read(
-      withMcpErrors(async () => mcpContent(formatAddonUsage(scanAddonUsage(PROJECT_ROOT, addon, from)), txIdLine()), {
+    ctx.rwlock.read(
+      withMcpErrors(async () => mcpContent(formatAddonUsage(scanAddonUsage(ctx.root, addon, from)), txIdLine(ctx)), {
         prefix: "scan-addon-usage:",
-        extraLines: () => [txIdLine()],
+        extraLines: () => [txIdLine(ctx)],
       }),
     ),
 );
@@ -1277,16 +1290,16 @@ reg(
     },
   },
   async ({ direction, addon }) =>
-    rwlock.read(
+    ctx.rwlock.read(
       withMcpErrors(
         async () => {
-          const result = syncAddonMetadata(PROJECT_ROOT, { direction, addon, dryRun: true });
+          const result = syncAddonMetadata(ctx.root, { direction, addon, dryRun: true });
           if ("error" in result) {
-            return mcpError(result.error, { prefix: "preview-addon-metadata-sync:", extraLines: [txIdLine()] });
+            return mcpError(result.error, { prefix: "preview-addon-metadata-sync:", extraLines: [txIdLine(ctx)] });
           }
-          return mcpContent(formatAddonMetadataSync(result), txIdLine());
+          return mcpContent(formatAddonMetadataSync(result), txIdLine(ctx));
         },
-        { prefix: "preview-addon-metadata-sync:", extraLines: () => [txIdLine()] },
+        { prefix: "preview-addon-metadata-sync:", extraLines: () => [txIdLine(ctx)] },
       ),
     ),
 );
@@ -1309,30 +1322,30 @@ reg(
     },
   },
   async ({ direction, addon, txId: expectedTxId }) =>
-    rwlock.write(
+    ctx.rwlock.write(
       withMcpErrors(
         async () => {
-          if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
+          if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
             return mcpError(
-              `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before syncing`,
-              { extraLines: [txIdLine()] },
+              `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before syncing`,
+              { extraLines: [txIdLine(ctx)] },
             );
           }
 
           let result: ReturnType<typeof syncAddonMetadata> | undefined;
-          // Suppress watcher — project.c3proj IS a watched target (sourceWatcher.ts
+          // Suppress ctx.watcher — project.c3proj IS a watched target (sourceWatcher.ts
           // SOURCE_DIRS/PROJECT_MANIFEST_FILE), so an unsuppressed write would
-          // self-trigger onSourceChange. No watcher.expect() needed: the sole write
+          // self-trigger onSourceChange. No ctx.watcher.expect() needed: the sole write
           // is to an already-existing, already-watched path entirely inside this
           // synchronous suppress window — same rule sync-project (above) follows,
           // and the same reasoning recorded at the workflow-tools comment below.
-          await watcher.suppress(async () => {
-            result = syncAddonMetadata(PROJECT_ROOT, { direction, addon, dryRun: false });
+          await ctx.watcher.suppress(async () => {
+            result = syncAddonMetadata(ctx.root, { direction, addon, dryRun: false });
           });
 
           if (result === undefined || "error" in result) {
             const message = result === undefined ? "sync-addon-metadata produced no result" : result.error;
-            return mcpError(message, { prefix: "sync-addon-metadata:", extraLines: [txIdLine()] });
+            return mcpError(message, { prefix: "sync-addon-metadata:", extraLines: [txIdLine(ctx)] });
           }
 
           // Bump ONLY if a write actually happened — a deliberate departure from
@@ -1340,14 +1353,14 @@ reg(
           // mode). This tool has genuine no-write paths (a preview-shaped
           // package-from-manifest report, or a manifest-from-package apply with no
           // would-change rows); bumping on those would falsely invalidate every
-          // client's txId. extractedDirty is untouched either way — project.c3proj
+          // client's txId. ctx.extractedDirty is untouched either way — project.c3proj
           // isn't a generator input (generateSidRegistry reads project.containers
-          // only) and the watcher itself excludes it from onSourceChange.
-          if (result.wrote) watcher.bump();
+          // only) and the ctx.watcher itself excludes it from onSourceChange.
+          if (result.wrote) ctx.watcher.bump();
 
-          return mcpContent(formatAddonMetadataSync(result), txIdLine());
+          return mcpContent(formatAddonMetadataSync(result), txIdLine(ctx));
         },
-        { prefix: "sync-addon-metadata:", extraLines: () => [txIdLine()] },
+        { prefix: "sync-addon-metadata:", extraLines: () => [txIdLine(ctx)] },
       ),
     ),
 );
@@ -1371,7 +1384,7 @@ reg(
     },
   },
   async ({ query, object, id, param, offset, limit }) =>
-    rwlock.read(
+    ctx.rwlock.read(
       withMcpErrors(
         async () => {
           // No-filter guard
@@ -1390,7 +1403,7 @@ reg(
             };
           }
 
-          const { aces, chunks, cachePresent } = lookup(PROJECT_ROOT, EXTRACTED_DIR, {
+          const { aces, chunks, cachePresent } = lookup(ctx.root, ctx.extractedDir, {
             query: hasQuery ? query : undefined,
             object: hasObject ? object : undefined,
             id: hasId ? id : undefined,
@@ -1404,7 +1417,7 @@ reg(
 
           const text = formatLookupResult({ aces, chunks, cachePresent });
 
-          return paginatedResponse(text, offset, limit, { stale: false });
+          return paginatedResponse(ctx, text, offset, limit, { stale: false });
         },
         { prefix: "search-docs:" },
       ),
@@ -1434,26 +1447,26 @@ reg(
     },
   },
   async ({ source, name, path: outRelPath, eventSheet, txId: expectedTxId, regenerate }, extra: Extra) =>
-    rwlock.write(
+    ctx.rwlock.write(
       withMcpErrors(
         async () => {
           const shouldRegenerate = regenerate !== false;
           const totalSteps = shouldRegenerate ? 8 : 2; // clone + sync + 6 generators
           const { log, text } = bufferingLogger();
-          if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
+          if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
             return mcpError(
-              `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding`,
-              { extraLines: [txIdLine()] },
+              `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before scaffolding`,
+              { extraLines: [txIdLine(ctx)] },
             );
           }
 
-          const layoutsDir = PROJECT.layoutsDir;
+          const layoutsDir = ctx.project.layoutsDir;
 
           // Path traversal check — output must stay within layouts/
           const outFullPath = resolveWithin(layoutsDir, outRelPath);
           if (outFullPath === null) {
             return mcpError(`Invalid output path '${outRelPath}' — must stay within layouts/`, {
-              extraLines: [txIdLine()],
+              extraLines: [txIdLine(ctx)],
             });
           }
 
@@ -1461,11 +1474,11 @@ reg(
           const sourceFullPath = resolveWithin(layoutsDir, source);
           if (sourceFullPath === null) {
             return mcpError(`Invalid source path '${source}' — must stay within layouts/`, {
-              extraLines: [txIdLine()],
+              extraLines: [txIdLine(ctx)],
             });
           }
           if (!fs.existsSync(sourceFullPath)) {
-            return mcpError(`Source layout not found: layouts/${source}`, { extraLines: [txIdLine()] });
+            return mcpError(`Source layout not found: layouts/${source}`, { extraLines: [txIdLine(ctx)] });
           }
 
           const sourceContent = fs.readFileSync(sourceFullPath, "utf-8");
@@ -1475,46 +1488,46 @@ reg(
           // project registry prevents cloned SIDs from colliding with anything in eventSheets/,
           // layouts/, or objectTypes/.
           const existingUids = collectAllUids(layoutsDir);
-          const sidRegistryPath = path.join(EXTRACTED_DIR, "sid-registry.txt");
+          const sidRegistryPath = path.join(ctx.extractedDir, "sid-registry.txt");
           const existingSids = fs.existsSync(sidRegistryPath) ? readRegistryFile(sidRegistryPath) : new Set<number>();
           const cloned = cloneLayout(sourceLayout, { name, eventSheet, existingUids, existingSids });
 
           // Write output
-          await watcher.suppress(async () => {
+          await ctx.watcher.suppress(async () => {
             // Ensure output directory exists
             const outDir = path.dirname(outFullPath);
             fs.mkdirSync(outDir, { recursive: true });
             writeSourceJson(outFullPath, cloned);
-            watcher.expect(outFullPath);
+            ctx.watcher.expect(outFullPath);
             await sendProgress(extra, 0, totalSteps, "Cloning layout");
             log(`Scaffolded ${name} → layouts/${outRelPath}`);
 
             // Sync project.c3proj
             await sendProgress(extra, 1, totalSteps, "Syncing project.c3proj");
-            runSync(PROJECT_ROOT, false, log);
+            runSync(ctx.root, false, log);
 
             // Regenerate extracted/ files
             if (shouldRegenerate) {
-              await runGenerators(log, extra, 2, totalSteps);
+              await runGenerators(ctx, log, extra, 2, totalSteps);
             }
           });
 
-          watcher.bump();
+          ctx.watcher.bump();
           if (shouldRegenerate) {
-            extractedDirty = false;
+            ctx.extractedDirty = false;
           }
-          return mcpContent(text(), txIdLine());
+          return mcpContent(text(), txIdLine(ctx));
         },
         {
           prefix: "Error:",
           onError: (e) => {
             if (e instanceof CancelledError) {
               // Layout was already written — source files changed, extracted/ is stale
-              watcher.bump();
-              extractedDirty = true;
+              ctx.watcher.bump();
+              ctx.extractedDirty = true;
             }
           },
-          extraLines: () => [txIdLine()],
+          extraLines: () => [txIdLine(ctx)],
         },
       ),
     ),
@@ -1534,19 +1547,19 @@ reg(
     },
   },
   async ({ source, name: targetName, txId: expectedTxId }) =>
-    rwlock.write(
+    ctx.rwlock.write(
       withMcpErrors(
         async () => {
           const { log, text } = bufferingLogger();
-          if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
+          if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
             return mcpError(
-              `State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before scaffolding`,
-              { extraLines: [txIdLine()] },
+              `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before scaffolding`,
+              { extraLines: [txIdLine(ctx)] },
             );
           }
 
-          const objectTypesDir = PROJECT.objectTypesDir;
-          const imagesDir = PROJECT.imagesDir;
+          const objectTypesDir = ctx.project.objectTypesDir;
+          const imagesDir = ctx.project.imagesDir;
 
           // Validate names don't contain path separators
           for (const [label, val] of [
@@ -1555,7 +1568,7 @@ reg(
           ] as const) {
             if (val.includes("/") || val.includes("\\") || val.includes("..")) {
               return mcpError(`Invalid ${label} '${val}' — must be a plain objectType name without path separators`, {
-                extraLines: [txIdLine()],
+                extraLines: [txIdLine(ctx)],
               });
             }
           }
@@ -1563,7 +1576,7 @@ reg(
           // Read source objectType
           const sourceFile = path.join(objectTypesDir, `${source}.json`);
           if (!fs.existsSync(sourceFile)) {
-            return mcpError(`Source objectType not found: objectTypes/${source}.json`, { extraLines: [txIdLine()] });
+            return mcpError(`Source objectType not found: objectTypes/${source}.json`, { extraLines: [txIdLine(ctx)] });
           }
 
           const sourceContent = fs.readFileSync(sourceFile, "utf-8");
@@ -1581,14 +1594,14 @@ reg(
           });
 
           // Write output and copy images
-          await watcher.suppress(async () => {
+          await ctx.watcher.suppress(async () => {
             // Write objectType JSON
             const outFile = path.join(objectTypesDir, `${targetName}.json`);
             writeSourceJson(outFile, cloned);
-            watcher.expect(outFile);
+            ctx.watcher.expect(outFile);
             log(`Scaffolded ${targetName} → objectTypes/${targetName}.json`);
 
-            // Discover and copy images (images/ is NOT watched — no expectedChanges needed)
+            // Discover and copy images (images/ is NOT watched — no ctx.expected needed)
             if (fs.existsSync(imagesDir)) {
               const imageCopies = discoverAndPlanImageCopies(imagesDir, source, targetName);
               for (const { sourcePath, targetPath, sourceBasename, targetBasename } of imageCopies) {
@@ -1598,22 +1611,22 @@ reg(
             }
 
             // Sync project.c3proj
-            runSync(PROJECT_ROOT, false, log);
+            runSync(ctx.root, false, log);
           });
 
-          watcher.bump();
-          return mcpContent(text(), txIdLine());
+          ctx.watcher.bump();
+          return mcpContent(text(), txIdLine(ctx));
         },
         {
           prefix: "Error:",
           onError: (e) => {
             if (e instanceof CancelledError) {
               // Sprite was already written — source files changed, extracted/ may be stale
-              watcher.bump();
-              extractedDirty = true;
+              ctx.watcher.bump();
+              ctx.extractedDirty = true;
             }
           },
-          extraLines: () => [txIdLine()],
+          extraLines: () => [txIdLine(ctx)],
         },
       ),
     ),
@@ -1625,13 +1638,14 @@ reg(
 // hands it to applyParsed. The recipe pipeline (expandWorkflows → primitive
 // dispatch → SidGenerator threading) handles fan-out, SID allocation, and
 // scene-graphs-folder-root registration — the MCP layer just owns the
-// concurrency boilerplate (rwlock, the OptimisticWatcher, registry freshness).
+// concurrency boilerplate (ctx.rwlock, the OptimisticWatcher, registry freshness).
 //
-// Mirrors the apply-recipe pattern. No watcher.expect() — wrapping the writes
-// in watcher.suppress() is sufficient for the watcher contract (apply-recipe
-// does the same).
+// Mirrors the apply-recipe pattern. No ctx.watcher.expect() — wrapping the writes
+// in ctx.watcher.suppress() is sufficient for the contract (apply-recipe does the
+// same).
 
 async function runWorkflowRecipe(
+  ctx: ProjectContext,
   recipe: Recipe,
   expectedTxId: number | undefined,
   regenerate: boolean | undefined,
@@ -1639,37 +1653,40 @@ async function runWorkflowRecipe(
 ): Promise<CallToolResult> {
   return withMcpErrors(
     async () => {
-      checkRegistryFreshness(path.join(EXTRACTED_DIR, "sid-registry.txt"));
+      checkRegistryFreshness(ctx, path.join(ctx.extractedDir, "sid-registry.txt"));
       const shouldRegenerate = regenerate !== false;
       const totalSteps = shouldRegenerate ? 7 : 1; // apply + 6 generators
       const { log, text } = bufferingLogger();
-      if (expectedTxId !== undefined && expectedTxId !== watcher.txId) {
-        return mcpError(`State changed (expected ${expectedTxId}, got ${watcher.txId}) — re-validate before applying`, {
-          extraLines: [txIdLine()],
-        });
+      if (expectedTxId !== undefined && expectedTxId !== ctx.watcher.txId) {
+        return mcpError(
+          `State changed (expected ${expectedTxId}, got ${ctx.watcher.txId}) — re-validate before applying`,
+          {
+            extraLines: [txIdLine(ctx)],
+          },
+        );
       }
-      await watcher.suppress(async () => {
+      await ctx.watcher.suppress(async () => {
         await sendProgress(extra, 0, totalSteps, "Applying workflow");
-        applyParsed(PROJECT_ROOT, recipe, { regenerate: false, log });
+        applyParsed(ctx.root, recipe, { regenerate: false, log });
         if (shouldRegenerate) {
-          await runGenerators(log, extra, 1, totalSteps);
+          await runGenerators(ctx, log, extra, 1, totalSteps);
         }
       });
-      watcher.bump();
+      ctx.watcher.bump();
       if (shouldRegenerate) {
-        extractedDirty = false;
+        ctx.extractedDirty = false;
       }
-      return mcpContent(text(), txIdLine());
+      return mcpContent(text(), txIdLine(ctx));
     },
     {
       prefix: "Error:",
       onError: (e) => {
         if (e instanceof CancelledError) {
-          watcher.bump();
-          extractedDirty = true;
+          ctx.watcher.bump();
+          ctx.extractedDirty = true;
         }
       },
-      extraLines: () => [txIdLine()],
+      extraLines: () => [txIdLine(ctx)],
     },
   )();
 }
@@ -1717,7 +1734,7 @@ reg(
     },
     extra: Extra,
   ) =>
-    rwlock.write(async () => {
+    ctx.rwlock.write(async () => {
       const recipe: Recipe = {
         layouts: {
           [templatesLayout]: [
@@ -1734,7 +1751,7 @@ reg(
           ],
         },
       };
-      return runWorkflowRecipe(recipe, expectedTxId, regenerate, extra);
+      return runWorkflowRecipe(ctx, recipe, expectedTxId, regenerate, extra);
     }),
 );
 
@@ -1755,13 +1772,13 @@ reg(
     },
   },
   async ({ layout, type, templateName, inheritOverrides, txId: expectedTxId, regenerate }, extra: Extra) =>
-    rwlock.write(async () => {
+    ctx.rwlock.write(async () => {
       const recipe: Recipe = {
         layouts: {
           [layout]: [{ op: "templatize-in-place", type, templateName, inheritOverrides }],
         },
       };
-      return runWorkflowRecipe(recipe, expectedTxId, regenerate, extra);
+      return runWorkflowRecipe(ctx, recipe, expectedTxId, regenerate, extra);
     }),
 );
 
@@ -1798,7 +1815,7 @@ reg(
     },
   },
   async ({ templatesLayout, templateName, sourceType, targets, txId: expectedTxId, regenerate }, extra: Extra) =>
-    rwlock.write(async () => {
+    ctx.rwlock.write(async () => {
       const recipe: Recipe = {
         layouts: {
           [templatesLayout]: [
@@ -1811,7 +1828,7 @@ reg(
           ],
         },
       };
-      return runWorkflowRecipe(recipe, expectedTxId, regenerate, extra);
+      return runWorkflowRecipe(ctx, recipe, expectedTxId, regenerate, extra);
     }),
 );
 
@@ -1842,7 +1859,7 @@ reg(
     { layout, type, templatesLayout, templateName, layer, inheritOverrides, txId: expectedTxId, regenerate },
     extra: Extra,
   ) =>
-    rwlock.write(async () => {
+    ctx.rwlock.write(async () => {
       const recipe: Recipe = {
         layouts: {
           [layout]: [
@@ -1857,7 +1874,7 @@ reg(
           ],
         },
       };
-      return runWorkflowRecipe(recipe, expectedTxId, regenerate, extra);
+      return runWorkflowRecipe(ctx, recipe, expectedTxId, regenerate, extra);
     }),
 );
 
@@ -1883,12 +1900,12 @@ reg(
     },
   },
   async ({ layout, layer, cascade, removeInstances, txId: expectedTxId, regenerate }, extra: Extra) =>
-    rwlock.write(async () => {
+    ctx.rwlock.write(async () => {
       // Path traversal check — layout must stay within layouts/
-      const layoutsDir = PROJECT.layoutsDir;
+      const layoutsDir = ctx.project.layoutsDir;
       const layoutFullPath = resolveWithin(layoutsDir, layout);
       if (layoutFullPath === null) {
-        return mcpError(`Invalid layout path '${layout}' — must stay within layouts/`, { extraLines: [txIdLine()] });
+        return mcpError(`Invalid layout path '${layout}' — must stay within layouts/`, { extraLines: [txIdLine(ctx)] });
       }
 
       const recipe: Recipe = {
@@ -1903,7 +1920,7 @@ reg(
           ],
         },
       };
-      return runWorkflowRecipe(recipe, expectedTxId, regenerate, extra);
+      return runWorkflowRecipe(ctx, recipe, expectedTxId, regenerate, extra);
     }),
 );
 
@@ -1919,9 +1936,9 @@ reg(
     inputSchema: {},
   },
   async () =>
-    rwlock.read(async () => {
+    ctx.rwlock.read(async () => {
       return {
-        content: [{ type: "text", text: `txId: ${watcher.txId}\nextractedDirty: ${extractedDirty}` }],
+        content: [{ type: "text", text: `txId: ${ctx.watcher.txId}\nextractedDirty: ${ctx.extractedDirty}` }],
       };
     }),
 );
@@ -1939,30 +1956,51 @@ export function __getServer(): McpServer {
   return server;
 }
 export function __setTestWatcher(w: OptimisticWatcher): void {
-  watcher = w;
+  ctx.watcher = w;
 }
 export function __setExtractedDirty(value: boolean): void {
-  extractedDirty = value;
+  ctx.extractedDirty = value;
 }
 export function __getExtractedDirty(): boolean {
-  return extractedDirty;
+  return ctx.extractedDirty;
 }
-export function __getProjectRoot(): string {
-  return PROJECT_ROOT;
-}
+// __getProjectRoot was removed (#95, F1) — 0 consumers across src/ and test/,
+// and server.ts is off the src/index.ts barrel, so its removal carries no
+// semver exposure. Use ctx.root from a handler/seam that already has ctx in
+// scope instead.
 export function __setProjectRoot(dir: string): void {
-  PROJECT_ROOT = dir;
-  EXTRACTED_DIR = path.join(dir, "extracted");
-  PROJECT = openProject(dir);
+  // Reassigns the WHOLE context, never a single field — root/extractedDir/
+  // project are getter-only precisely so they can't go stale piecemeal (see
+  // the `ctx` declaration comment above). Hardcodes the "extracted" default
+  // rather than loading construct3-chef.config.json, matching this seam's
+  // pre-#95 behavior exactly (it never read chef config either).
+  //
+  // Carries watcher/ops forward from the outgoing context: pre-#95, watcher
+  // was an INDEPENDENT global untouched by reassigning PROJECT_ROOT, and
+  // some suites rely on that — an outer beforeEach sets the fake watcher,
+  // then a nested describe's own beforeEach calls __setProjectRoot for a
+  // fresh tmp dir without re-setting the watcher (test/mcp/serverHandlers.test.ts's
+  // "[strays] report" block). A wholesale reconstruction that dropped the
+  // watcher would otherwise strand those suites on an unset ctx.watcher.
+  const { watcher: prevWatcher, ops: prevOps } = ctx;
+  ctx = new ProjectContext(ctx.id, dir, DEFAULT_CHEF_CONFIG);
+  ctx.watcher = prevWatcher;
+  ctx.ops = prevOps;
 }
 export function __setExtractedDir(dir: string): void {
-  EXTRACTED_DIR = dir;
+  // Same whole-context reassignment (and the same watcher/ops carry-forward)
+  // as __setProjectRoot, keeping root/id but pointing extractedDir at an
+  // arbitrary absolute path (possibly outside root — the search-docs fixture
+  // tests do this). path.relative + the ProjectContext constructor's
+  // path.join(root, config.extractedDir) round trips back to exactly `dir`,
+  // including when `dir` sits outside `root`.
+  const { watcher: prevWatcher, ops: prevOps } = ctx;
+  ctx = new ProjectContext(ctx.id, ctx.root, { ...ctx.config, extractedDir: path.relative(ctx.root, dir) });
+  ctx.watcher = prevWatcher;
+  ctx.ops = prevOps;
 }
 export function __resetTestState(): void {
-  extractedDirty = false;
-  PROJECT_ROOT = process.cwd();
-  EXTRACTED_DIR = path.join(PROJECT_ROOT, "extracted");
-  PROJECT = openProject(PROJECT_ROOT);
+  ctx = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
@@ -1974,36 +2012,35 @@ export async function startServer(projectDir?: string, overrides?: Partial<ChefC
     marker: "project.c3proj",
     searchDepth: 1,
   });
+  let rootDir: string;
   if (isMcpError(resolved)) {
     console.error(`[construct3-chef] Root resolution: ${mcpErrorText(resolved)} — falling back to cwd`);
-    PROJECT_ROOT = process.cwd();
+    rootDir = process.cwd();
   } else {
-    PROJECT_ROOT = resolved.path;
+    rootDir = resolved.path;
     if (resolved.source === "cwd") {
       console.error(
-        `[construct3-chef] Warning: no project.c3proj found via --project-dir, $C3_PROJECT_DIR, or discovery — using cwd ${PROJECT_ROOT}`,
+        `[construct3-chef] Warning: no project.c3proj found via --project-dir, $C3_PROJECT_DIR, or discovery — using cwd ${rootDir}`,
       );
     }
   }
-  PROJECT = openProject(PROJECT_ROOT);
   console.error(
-    `[construct3-chef] Root: ${PROJECT_ROOT} (source: ${isMcpError(resolved) ? "cwd-fallback" : resolved.source})`,
+    `[construct3-chef] Root: ${rootDir} (source: ${isMcpError(resolved) ? "cwd-fallback" : resolved.source})`,
   );
-  const config = await loadChefConfig(PROJECT_ROOT, overrides);
-  EXTRACTED_DIR = path.join(PROJECT_ROOT, config.extractedDir);
+  ctx = await createProjectContext(DEFAULT_PROJECT_ID, rootDir, overrides);
 
   // Startup validation — warn but don't hard-fail
-  const c3projPath = path.join(PROJECT_ROOT, "project.c3proj");
+  const c3projPath = path.join(ctx.root, "project.c3proj");
   if (!fs.existsSync(c3projPath)) {
     console.error(
-      `[construct3-chef] Warning: project.c3proj not found in ${PROJECT_ROOT} — not a Construct 3 project directory`,
+      `[construct3-chef] Warning: project.c3proj not found in ${ctx.root} — not a Construct 3 project directory`,
     );
   }
-  if (!fs.existsSync(EXTRACTED_DIR)) {
+  if (!fs.existsSync(ctx.extractedDir)) {
     console.error(`[construct3-chef] extracted/ not found — auto-generating...`);
     try {
       const log: Logger = (...args) => console.error(`[construct3-chef]   ${args.map(String).join(" ")}`);
-      await runGenerators(log);
+      await runGenerators(ctx, log);
       console.error(`[construct3-chef] Auto-generation complete`);
     } catch (e) {
       console.error(
@@ -2012,22 +2049,23 @@ export async function startServer(projectDir?: string, overrides?: Partial<ChefC
       console.error(`[construct3-chef] Run 'npm run generate-c3' manually to generate extracted files`);
     }
   }
-  console.error(`[construct3-chef] Starting server in ${PROJECT_ROOT}`);
+  console.error(`[construct3-chef] Starting server in ${ctx.root}`);
 
   // Resolve ops dir from already-loaded config (avoids a double loadChefConfig call).
-  const opsDir = resolveWithin(PROJECT_ROOT, config.ops.dir) ?? path.join(PROJECT_ROOT, "ops");
+  const opsDir = resolveWithin(ctx.root, ctx.config.ops.dir) ?? path.join(ctx.root, "ops");
 
-  setupWatchers();
+  setupWatchers(ctx);
 
   // Start the OpsRegistry BEFORE server.connect() so initial op-* tools are
   // present from the first tools/list response (no spurious list_changed before connect).
   const opsRegistry = new OpsRegistry({
     server,
     opsDir,
-    watch: config.ops.watch,
-    applyRecipe: (recipe, opts, extra) => applyRecipeWithConcurrency(recipe, opts, extra),
+    watch: ctx.config.ops.watch,
+    applyRecipe: (recipe, opts, extra) => applyRecipeWithConcurrency(ctx, recipe, opts, extra),
     log: emitLog,
   });
+  ctx.ops = opsRegistry;
   opsRegistry.start();
 
   // Graceful shutdown

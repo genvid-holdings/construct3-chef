@@ -2073,6 +2073,20 @@ export function __resetTestState(): void {
   defaultCtx = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
   reseedRegistry();
 }
+// Installs an arbitrary caller-built multi-project registry (#95 F5,
+// T-X4/T-X5/T-X6/T-C6) — the seam __setProjectRoot/__setExtractedDir don't
+// provide, since both always reseed a SINGLE-entry registry from `defaultCtx`
+// (see reseedRegistry below). Reassigns `REGISTRY` and `defaultCtx` together,
+// same atomicity rationale as every other seam here: `defaultCtx` is set to
+// `reg`'s OWN default entry (`reg.get(reg.defaultId)`) so the two never
+// disagree about which project is "the" default. `__resetTestState` already
+// restores single-project state afterward (it rebuilds REGISTRY from a fresh
+// `defaultCtx` via reseedRegistry, wholesale — not a merge), so a suite using
+// this seam needs no bespoke teardown beyond the existing afterEach.
+export function __setRegistry(reg: ProjectRegistry): void {
+  REGISTRY = reg;
+  defaultCtx = REGISTRY.get(REGISTRY.defaultId)!;
+}
 // Rebuild REGISTRY as the single-entry { defaultCtx.id: defaultCtx } registry —
 // keeps list-projects consistent with whatever the test seams above just
 // pointed `defaultCtx` at. Not used by startServer, which builds a real

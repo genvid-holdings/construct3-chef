@@ -367,6 +367,48 @@ export function renderEventSidRows(entries: SidMapEntry[], grep?: string): strin
 
 // ── File Watchers ────────────────────────────────────────────────────────────
 
+/**
+ * Wire the per-project runtime for EVERY registered project — watcher first,
+ * then its own OpsRegistry — and return the registries so shutdown can stop
+ * them all.
+ *
+ * Both halves must cover every context, not just the default. `watcher` is
+ * declared with a definite-assignment assertion, so a context that never gets
+ * one holds `undefined` and the first `ctx.watcher.txId` read throws at
+ * runtime — which is most of the tx-tracked surface (`txIdLine`,
+ * `compareTxToken`, `get-state`). Keeping the two in one loop is what stops
+ * them drifting apart again: an earlier revision wired ops per-project but
+ * left the watcher call outside the loop, so every non-default project threw
+ * on its first tx-tracked call (#95, T-W1).
+ *
+ * OpsRegistries start BEFORE server.connect() so initial op-* tools are
+ * present in the first tools/list response (no spurious list_changed before
+ * connect). Each is bound to ITS OWN context via the closure below, never
+ * `defaultCtx`, so e.g. `op-beta_promote`'s applyRecipe cannot touch alpha's
+ * tree.
+ */
+function wireAllProjects(): OpsRegistry[] {
+  const opsRegistries: OpsRegistry[] = [];
+  for (const { id } of REGISTRY.list()) {
+    const c = REGISTRY.get(id)!;
+    setupWatchers(c);
+    // Resolve ops dir from already-loaded config (avoids a double loadChefConfig call).
+    const opsDir = resolveWithin(c.root, c.config.ops.dir) ?? path.join(c.root, "ops");
+    const opsRegistry = new OpsRegistry({
+      server,
+      projectId: c.id,
+      opsDir,
+      watch: c.config.ops.watch,
+      applyRecipe: (recipe, opts, extra) => applyRecipeWithConcurrency(c, recipe, opts, extra),
+      log: emitLog,
+    });
+    c.ops = opsRegistry;
+    opsRegistry.start();
+    opsRegistries.push(opsRegistry);
+  }
+  return opsRegistries;
+}
+
 function setupWatchers(ctx: ProjectContext): void {
   ctx.watcher = createSourceWatcher({
     projectRoot: ctx.root,
@@ -2009,7 +2051,7 @@ reg(
   {
     title: "List Registered Projects",
     description:
-      "List every project registered at server launch (via repeated --project-dir, C3_PROJECT_DIRS, or the single-root C3_PROJECT_DIR/discovery/cwd path), each with its id, root, extractedDir, and whether it is the default. Every other tool accepts a `project` selector (see its `project` parameter) to target a non-default registered project; startup validation, auto-generation, and the file watcher still wire up only the default project. The ops registry wires up per-project instead (#95 F6) — every registered project gets its own op-<id>_<opName> tools from its own ops/ dir.",
+      "List every project registered at server launch (via repeated --project-dir, C3_PROJECT_DIRS, or the single-root C3_PROJECT_DIR/discovery/cwd path), each with its id, root, extractedDir, and whether it is the default. Every other tool accepts a `project` selector (see its `project` parameter) to target a non-default registered project. Each registered project gets its own file watcher and its own ops registry, so every project has live txId tracking and its own op-<id>_<opName> tools from its own ops/ dir. Startup validation and auto-generation still run for the default project only — a non-default project's extracted/ may be stale at launch until you run regenerate against it.",
     annotations: READ_ONLY,
     inputSchema: {},
   },
@@ -2103,6 +2145,15 @@ export function __resetTestState(): void {
 // restores single-project state afterward (it rebuilds REGISTRY from a fresh
 // `defaultCtx` via reseedRegistry, wholesale — not a merge), so a suite using
 // this seam needs no bespoke teardown beyond the existing afterEach.
+// Runs the REAL per-project wiring `startServer` uses, over whatever registry
+// is installed. Exposed because the multi-project handler tests otherwise
+// supply watchers themselves via __setTestWatcher, which is exactly the
+// coverage gap that let a default-only watcher wiring ship green (#95, T-W1):
+// a test that hands each context a watcher cannot notice that production
+// never did. Returns the OpsRegistries so a caller can stop them.
+export function __wireAllProjects(): OpsRegistry[] {
+  return wireAllProjects();
+}
 export function __setRegistry(reg: ProjectRegistry): void {
   REGISTRY = reg;
   defaultCtx = REGISTRY.get(REGISTRY.defaultId)!;
@@ -2165,32 +2216,7 @@ export async function startServer(
   }
   console.error(`[construct3-chef] Starting server in ${defaultCtx.root}`);
 
-  setupWatchers(defaultCtx);
-
-  // Start every registered project's OpsRegistry BEFORE server.connect() so
-  // initial op-* tools are present from the first tools/list response (no
-  // spurious list_changed before connect). Every registered project gets its
-  // own — not just defaultCtx (#95 F6) — so a non-default project's own
-  // ops/*.json files register their own op-<id>_<opName> tools too. Each is
-  // bound to ITS OWN context `c` via the closure below, never `defaultCtx`,
-  // so e.g. op-beta_promote's applyRecipe can never touch alpha's tree.
-  const opsRegistries: OpsRegistry[] = [];
-  for (const { id } of REGISTRY.list()) {
-    const c = REGISTRY.get(id)!;
-    // Resolve ops dir from already-loaded config (avoids a double loadChefConfig call).
-    const opsDirC = resolveWithin(c.root, c.config.ops.dir) ?? path.join(c.root, "ops");
-    const opsRegistry = new OpsRegistry({
-      server,
-      projectId: c.id,
-      opsDir: opsDirC,
-      watch: c.config.ops.watch,
-      applyRecipe: (recipe, opts, extra) => applyRecipeWithConcurrency(c, recipe, opts, extra),
-      log: emitLog,
-    });
-    c.ops = opsRegistry;
-    opsRegistry.start();
-    opsRegistries.push(opsRegistry);
-  }
+  const opsRegistries = wireAllProjects();
 
   // Graceful shutdown
   function shutdown() {

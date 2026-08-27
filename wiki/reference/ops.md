@@ -2,7 +2,7 @@
 type: reference
 title: "User-Defined Ops"
 description: >-
-  User-defined ops: op file format, param types, substitution rules, MCP (`list-ops` / `op-<name>` / hot reload) and CLI (`list-ops` / `apply-op`) surfaces, and the `ops.dir` / `ops.watch` config keys
+  User-defined ops: op file format, param types, substitution rules, MCP (`list-ops` / `op-<projectId>_<opName>` / hot reload) and CLI (`list-ops` / `apply-op`) surfaces, and the `ops.dir` / `ops.watch` config keys
 tags: [reference, ops, config]
 status: stable
 stale_after: 2027-02-20
@@ -65,7 +65,7 @@ A param with `required: false` and no `default` is optional with no fallback —
 
 ## Op naming
 
-The op name is derived from the filename sans `.json`. It must match `/^[a-z0-9][a-z0-9-]*$/i`. The corresponding MCP tool is named `op-<name>` — so `ops/add-screen.json` registers as the MCP tool `op-add-screen`.
+The op name is derived from the filename sans `.json`. It must match `/^[a-z0-9][a-z0-9-]*$/i`. The corresponding MCP tool is named `op-<projectId>_<opName>` — every registered project gets its own `OpsRegistry` instance, scoped to that project's `ops/` directory, so `alpha`'s `ops/add-screen.json` registers as `op-alpha_add-screen`, not the flat `op-add-screen` a single-project server previously used. The separator is `_`, never `-`: op names allow `-` and so do project ids, so `op-<id>-<name>` is ambiguous (project `a` + op `b-c` and project `a-b` + op `c` both yield `op-a-b-c`); neither charset admits `_`. This applies uniformly, including to the default project — there is no flat fallback form. See ADR [0034](../decisions/0034-mcp-server-multi-project-support.md).
 
 Files whose names fail this check are skipped (a load error is reported by `list-ops`).
 
@@ -120,13 +120,13 @@ A missing `ops` block is equivalent to the defaults above. The ops dir need not 
 
 ### `list-ops` (read-only)
 
-Returns the same formatted list as the CLI `list-ops` command (shared `formatOpsList` formatter). Each entry shows the op name, description, and parameters with their types and required/optional/default qualifiers.
+Returns the same formatted list as the CLI `list-ops` command (shared `formatOpsList` formatter) for the target project. Each entry shows the op name, description, and parameters with their types and required/optional/default qualifiers.
 
-No input parameters.
+Accepts the standard optional `project` id parameter (omit for the default project); no other input.
 
-### `op-<name>` (mutate)
+### `op-<projectId>_<opName>` (mutate)
 
-One tool per op, registered as `op-<name>` (e.g. `op-add-screen`). The input schema is derived from the op's `params` array — each param becomes a typed, optionally-described input field.
+One tool per op per registered project, registered as `op-<projectId>_<opName>` (e.g. `op-alpha_add-screen`) — see [Op naming](#op-naming) for why the id is baked into the tool name rather than passed as a `project` parameter. The input schema is derived from the op's `params` array — each param becomes a typed, optionally-described input field.
 
 Applying an op tool:
 1. Substitutes params into the recipe template.
@@ -140,7 +140,7 @@ Substitution errors (unknown args, missing required params, unresolved placehold
 
 When `ops.watch` is `true` (the default), the `OpsRegistry` watches the ops directory with `fs.watch`. Adding, editing, or removing an op file triggers a debounced reconcile:
 
-- **New op file** → registers a new `op-<name>` tool (MCP `tools/list_changed` notification sent automatically by the SDK).
+- **New op file** → registers a new `op-<projectId>_<opName>` tool (MCP `tools/list_changed` notification sent automatically by the SDK).
 - **Edited op file** → updates the existing tool's description and input schema in place.
 - **Removed op file** → removes the tool.
 

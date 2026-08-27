@@ -14,6 +14,7 @@ import {
 } from "../../src/mcp/server.js";
 import { createProjectContext } from "../../src/mcp/projectContext.js";
 import { ProjectRegistry } from "../../src/mcp/projectRegistry.js";
+import { OpsRegistry, type RegisterableServer } from "../../src/mcp/opsRegistry.js";
 
 /**
  * Cross-project behavioural tests for #95's F5 (Seam C: `regP` selector
@@ -75,6 +76,17 @@ function makeFakeWatcher(txId = 0): FakeWatcher {
 
 function makeExtra(): any {
   return { signal: new AbortController().signal };
+}
+
+/** Minimal fake RegisterableServer — T-C6's list-ops coverage only needs
+ *  ctx.ops.getLoadedOps() to work; the ops dir it points at doesn't exist, so
+ *  reconcile() never actually calls registerTool. */
+function makeFakeOpsServer(): RegisterableServer {
+  return {
+    registerTool() {
+      throw new Error("unexpected registerTool call — T-C6's ops dir should be empty");
+    },
+  };
 }
 
 // cpSync stamps every copied file with ~the same mtime, and the recursive
@@ -403,6 +415,7 @@ describe("MCP server multi-project behavior (#95, Seam C)", () => {
       "list-event-sheets": {},
       "list-layouts": {},
       "list-global-layers": {},
+      "list-ops": {},
       "navigation-graph": {},
       "read-dsl": { sheet: "NoSuchSheet" },
       "read-dsl-index": { sheet: "NoSuchSheet" },
@@ -510,6 +523,25 @@ describe("MCP server multi-project behavior (#95, Seam C)", () => {
       const ctxExplicit = await createProjectContext(DEFAULT_ID, rootExplicit);
       ctxOmit.watcher = makeFakeWatcher(0) as any;
       ctxExplicit.watcher = makeFakeWatcher(0) as any;
+      // list-ops reads ctx.ops (#95 F6) — wire a minimal one per root, pointed
+      // at a nonexistent ops/ dir so both sides deterministically report "no
+      // ops" (loadOpsFromDir treats an absent dir as empty, never an error).
+      ctxOmit.ops = new OpsRegistry({
+        server: makeFakeOpsServer(),
+        projectId: DEFAULT_ID,
+        opsDir: path.join(rootOmit, "ops"),
+        watch: false,
+        applyRecipe: async () => ({ content: [{ type: "text", text: "unused" }] }),
+      });
+      ctxOmit.ops.start();
+      ctxExplicit.ops = new OpsRegistry({
+        server: makeFakeOpsServer(),
+        projectId: DEFAULT_ID,
+        opsDir: path.join(rootExplicit, "ops"),
+        watch: false,
+        applyRecipe: async () => ({ content: [{ type: "text", text: "unused" }] }),
+      });
+      ctxExplicit.ops.start();
       registryOmit = new ProjectRegistry();
       registryOmit.add(ctxOmit);
       registryExplicit = new ProjectRegistry();

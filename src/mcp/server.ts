@@ -60,6 +60,7 @@ import { diffAddonAces, formatAceDiff, resolveAceSource } from "../c3/addonAceDi
 import { scanAddonUsage, formatAddonUsage } from "../c3/addonAceUsage.js";
 import { syncAddonMetadata, formatAddonMetadataSync } from "../c3/addonMetadataSync.js";
 import { lookup, formatLookupResult } from "../c3/aceLookup.js";
+import { formatOpsList } from "../c3/opTemplate.js";
 import { OpsRegistry } from "./opsRegistry.js";
 import { ProjectContext, createProjectContext } from "./projectContext.js";
 import { ProjectRegistry } from "./projectRegistry.js";
@@ -467,6 +468,25 @@ regP(
         format === "plantuml" ? generatePlantUML(navEntries, sheetToLayout) : formatNavTable(navEntries, sheetToLayout);
       return paginatedResponse(ctx, text, offset, limit);
     }),
+);
+
+// Hoisted out of OpsRegistry (#95 F6): OpsRegistry is now one-per-project
+// (see startServer below), so a static per-context "list-ops" registration
+// would collide across N registered projects. Registered once, here, like
+// every other project-scoped tool — the `project` selector (via `regP`)
+// picks which context's `ctx.ops` to read, rather than which tool to call.
+regP(
+  "list-ops",
+  {
+    title: "List Ops",
+    description: "List user-defined ops (parameterized recipe templates) with their parameters.",
+    annotations: READ_ONLY,
+    inputSchema: {},
+  },
+  async (ctx) => {
+    const { ops, errors } = ctx.ops.getLoadedOps();
+    return mcpContent(formatOpsList(ops, errors));
+  },
 );
 
 // ── Read Tools ────────────────────────────────────────────────────────────────
@@ -934,7 +954,7 @@ regP(
 
 /**
  * Core apply orchestration: parse-already-done recipe → write lock → apply →
- * optionally regenerate. Encapsulates concurrency boilerplate so op-<name>
+ * optionally regenerate. Encapsulates concurrency boilerplate so op-<id>_<name>
  * tools can reuse the exact same flow without duplicating ctx.rwlock/ctx.watcher logic.
  *
  * Module-internal — NOT exported on the public barrel.
@@ -1989,7 +2009,7 @@ reg(
   {
     title: "List Registered Projects",
     description:
-      "List every project registered at server launch (via repeated --project-dir, C3_PROJECT_DIRS, or the single-root C3_PROJECT_DIR/discovery/cwd path), each with its id, root, extractedDir, and whether it is the default. Every other tool accepts a `project` selector (see its `project` parameter) to target a non-default registered project; startup validation, auto-generation, the file watcher, and the ops registry still wire up only the default project.",
+      "List every project registered at server launch (via repeated --project-dir, C3_PROJECT_DIRS, or the single-root C3_PROJECT_DIR/discovery/cwd path), each with its id, root, extractedDir, and whether it is the default. Every other tool accepts a `project` selector (see its `project` parameter) to target a non-default registered project; startup validation, auto-generation, and the file watcher still wire up only the default project. The ops registry wires up per-project instead (#95 F6) — every registered project gets its own op-<id>_<opName> tools from its own ops/ dir.",
     annotations: READ_ONLY,
     inputSchema: {},
   },
@@ -2114,10 +2134,13 @@ export async function startServer(
   // resolves its ProjectContext from REGISTRY at call time (see `regP`,
   // ADR wiki/decisions/0034). `defaultCtx` — the sole module-level context
   // this file otherwise carries — is still what startup validation,
-  // auto-generation, the file watcher, and the OpsRegistry wire up below: a
-  // non-default registered project gets no startup validation/auto-
-  // generation/watcher/ops of its own, it's a registry entry, reachable by
-  // every regP tool, but not a live one at startup.
+  // auto-generation, and the file watcher wire up below: a non-default
+  // registered project gets no startup validation/auto-generation/watcher of
+  // its own, it's a registry entry, reachable by every regP tool, but not a
+  // live one at startup. The ops registry is the one exception — every
+  // registered project gets its own (#95 F6, below), because a project's
+  // op-<id>_<opName> tools are read from ITS OWN ops/ dir and must exist for
+  // op-* tool calls to have anything to resolve, regardless of default-ness.
   defaultCtx = REGISTRY.get(REGISTRY.defaultId)!;
 
   // Startup validation — warn but don't hard-fail
@@ -2142,27 +2165,37 @@ export async function startServer(
   }
   console.error(`[construct3-chef] Starting server in ${defaultCtx.root}`);
 
-  // Resolve ops dir from already-loaded config (avoids a double loadChefConfig call).
-  const opsDir = resolveWithin(defaultCtx.root, defaultCtx.config.ops.dir) ?? path.join(defaultCtx.root, "ops");
-
   setupWatchers(defaultCtx);
 
-  // Start the OpsRegistry BEFORE server.connect() so initial op-* tools are
-  // present from the first tools/list response (no spurious list_changed before connect).
-  const opsRegistry = new OpsRegistry({
-    server,
-    opsDir,
-    watch: defaultCtx.config.ops.watch,
-    applyRecipe: (recipe, opts, extra) => applyRecipeWithConcurrency(defaultCtx, recipe, opts, extra),
-    log: emitLog,
-  });
-  defaultCtx.ops = opsRegistry;
-  opsRegistry.start();
+  // Start every registered project's OpsRegistry BEFORE server.connect() so
+  // initial op-* tools are present from the first tools/list response (no
+  // spurious list_changed before connect). Every registered project gets its
+  // own — not just defaultCtx (#95 F6) — so a non-default project's own
+  // ops/*.json files register their own op-<id>_<opName> tools too. Each is
+  // bound to ITS OWN context `c` via the closure below, never `defaultCtx`,
+  // so e.g. op-beta_promote's applyRecipe can never touch alpha's tree.
+  const opsRegistries: OpsRegistry[] = [];
+  for (const { id } of REGISTRY.list()) {
+    const c = REGISTRY.get(id)!;
+    // Resolve ops dir from already-loaded config (avoids a double loadChefConfig call).
+    const opsDirC = resolveWithin(c.root, c.config.ops.dir) ?? path.join(c.root, "ops");
+    const opsRegistry = new OpsRegistry({
+      server,
+      projectId: c.id,
+      opsDir: opsDirC,
+      watch: c.config.ops.watch,
+      applyRecipe: (recipe, opts, extra) => applyRecipeWithConcurrency(c, recipe, opts, extra),
+      log: emitLog,
+    });
+    c.ops = opsRegistry;
+    opsRegistry.start();
+    opsRegistries.push(opsRegistry);
+  }
 
   // Graceful shutdown
   function shutdown() {
     console.error("[construct3-chef] Shutting down...");
-    opsRegistry.stop();
+    for (const r of opsRegistries) r.stop();
     server.close().catch(() => {});
     process.exit(0);
   }

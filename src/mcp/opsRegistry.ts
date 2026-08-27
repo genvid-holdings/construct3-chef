@@ -7,16 +7,9 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { z } from "zod";
-import { mcpContent, mcpError, READ_ONLY, MUTATE } from "@genvidtech/mcp-utils";
+import { mcpError, MUTATE } from "@genvidtech/mcp-utils";
 import type { Recipe } from "../c3/recipeInterpreter.js";
-import {
-  loadOpsFromDir,
-  opToInputSchema,
-  substituteOp,
-  formatOpsList,
-  type LoadedOp,
-  type OpLoadError,
-} from "../c3/opTemplate.js";
+import { loadOpsFromDir, opToInputSchema, substituteOp, type LoadedOp, type OpLoadError } from "../c3/opTemplate.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -64,6 +57,17 @@ export interface RegisterableServer {
 
 export interface OpsRegistryDeps {
   server: RegisterableServer;
+  /**
+   * The owning project's id (`ProjectContext.id`, #95 F6). Every op tool this
+   * registry registers is named `op-<projectId>_<opName>` — the `_` separator
+   * (never `-`) is load-bearing: op names match `/^[a-z0-9][a-z0-9-]*$/i` and
+   * project ids allow `-`, so `op-<id>-<name>` is genuinely ambiguous (project
+   * `a` + op `b-c` and project `a-b` + op `c` both yield `op-a-b-c`). Neither
+   * charset admits `_`, so it's collision-free. Verified against the real MCP
+   * SDK (`tools/list`/`tools/call` both handle an underscore-bearing name) —
+   * see ADR wiki/decisions/0034.
+   */
+  projectId: string;
   /** Absolute, containment-checked path to the ops directory. */
   opsDir: string;
   /** Whether to start an fs.watch on opsDir for hot-reload. */
@@ -92,6 +96,7 @@ export interface OpsRegistryDeps {
  */
 export class OpsRegistry {
   private readonly server: RegisterableServer;
+  private readonly projectId: string;
   private readonly opsDir: string;
   private readonly watch: boolean;
   private readonly applyRecipe: OpsRegistryDeps["applyRecipe"];
@@ -105,6 +110,7 @@ export class OpsRegistry {
 
   constructor(deps: OpsRegistryDeps) {
     this.server = deps.server;
+    this.projectId = deps.projectId;
     this.opsDir = deps.opsDir;
     this.watch = deps.watch;
     this.applyRecipe = deps.applyRecipe;
@@ -112,18 +118,32 @@ export class OpsRegistry {
   }
 
   /**
-   * Register the static list-ops tool, run the initial reconcile to register
-   * op-* tools, then start watching (if configured).
+   * Run the initial reconcile to register this project's op-* tools, then
+   * start watching (if configured). `list-ops` is NOT registered here — it
+   * moved to server.ts as a normal `regP` tool reading {@link getLoadedOps}
+   * (#95 F6): a static per-context tool registration doesn't scale to N
+   * registered projects (N contexts would each try to register the same
+   * static "list-ops" name), so server.ts registers it once and resolves the
+   * project via its usual `project` selector instead.
    *
    * Call BEFORE server.connect() so initial tools exist at connect time without
    * triggering spurious notifications (SDK only notifies when connected).
    */
   start(): void {
-    this.registerListOps();
     this.reconcile();
     if (this.watch) {
       this.startWatching();
     }
+  }
+
+  /**
+   * Current ops + load errors, for the `list-ops` tool (server.ts, #95 F6).
+   * Returns the live arrays directly; callers must not mutate them —
+   * `reconcile()` replaces both wholesale on the next call, never mutates in
+   * place.
+   */
+  getLoadedOps(): { ops: LoadedOp[]; errors: OpLoadError[] } {
+    return { ops: this.ops, errors: this.errors };
   }
 
   /**
@@ -144,7 +164,7 @@ export class OpsRegistry {
         if (!newNames.has(name)) {
           this.opTools.get(name)!.remove();
           this.opTools.delete(name);
-          this.log("info", `[ops] removed tool op-${name}`);
+          this.log("info", `[ops] removed tool op-${this.projectId}_${name}`);
         }
       }
 
@@ -157,12 +177,12 @@ export class OpsRegistry {
             paramsSchema: opToInputSchema(op.def),
             callback: this.makeOpHandler(op),
           });
-          this.log("debug", `[ops] updated tool op-${op.name}`);
+          this.log("debug", `[ops] updated tool op-${this.projectId}_${op.name}`);
         } else {
           // New op — register and track
           const tool = this.registerOp(op);
           this.opTools.set(op.name, tool);
-          this.log("info", `[ops] registered tool op-${op.name}`);
+          this.log("info", `[ops] registered tool op-${this.projectId}_${op.name}`);
         }
       }
 
@@ -211,7 +231,7 @@ export class OpsRegistry {
 
   private registerOp(op: LoadedOp): RegisterableTool {
     return this.server.registerTool(
-      `op-${op.name}`,
+      `op-${this.projectId}_${op.name}`,
       {
         title: `Op: ${op.name}`,
         description: op.def.description,
@@ -219,21 +239,6 @@ export class OpsRegistry {
         inputSchema: opToInputSchema(op.def),
       },
       this.makeOpHandler(op),
-    );
-  }
-
-  private registerListOps(): void {
-    this.server.registerTool(
-      "list-ops",
-      {
-        title: "List Ops",
-        description: "List user-defined ops (parameterized recipe templates) with their parameters.",
-        annotations: READ_ONLY,
-        inputSchema: {},
-      },
-      async (_args, _extra) => {
-        return mcpContent(formatOpsList(this.ops, this.errors));
-      },
     );
   }
 

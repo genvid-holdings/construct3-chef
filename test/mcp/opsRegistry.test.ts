@@ -131,6 +131,13 @@ const MINIMAL_OP_2 = {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+// A single stable project id used throughout this file's OpsRegistry
+// constructions. Multi-project namespace behavior (T-O1/T-O2 — two DIFFERENT
+// project ids, collision, and cross-project mutation isolation) lives in
+// test/mcp/opsRegistry.multiProject.test.ts instead; this file stays focused
+// on OpsRegistry's own per-instance behavior (#95 F6).
+const PROJECT_ID = "acme";
+
 describe("OpsRegistry", () => {
   // ── start() with sample-ops fixture ─────────────────────────────────────────
 
@@ -144,6 +151,7 @@ describe("OpsRegistry", () => {
       applySpy = makeApplySpy();
       registry = new OpsRegistry({
         server: fakeServer.server,
+        projectId: PROJECT_ID,
         opsDir: SAMPLE_OPS_DIR,
         watch: false,
         applyRecipe: applySpy.spy,
@@ -155,36 +163,41 @@ describe("OpsRegistry", () => {
       registry.stop();
     });
 
-    it("registers a list-ops tool", () => {
-      expect(fakeServer.tools.has("list-ops")).to.equal(true);
+    it("does NOT register a static list-ops tool (hoisted to server.ts, #95 F6)", () => {
+      expect(fakeServer.tools.has("list-ops")).to.equal(false);
     });
 
-    it("registers one op-* tool for add-screen (valid op)", () => {
-      expect(fakeServer.tools.has("op-add-screen")).to.equal(true);
+    it("registers one op-<projectId>_<name> tool for add-screen (valid op)", () => {
+      expect(fakeServer.tools.has("op-acme_add-screen")).to.equal(true);
     });
 
     it("does NOT register a tool for bad-schema (malformed op)", () => {
       // bad-schema.json fails OpDefinitionSchema (missing description)
-      expect(fakeServer.tools.has("op-bad-schema")).to.equal(false);
+      expect(fakeServer.tools.has("op-acme_bad-schema")).to.equal(false);
     });
 
-    it("op-add-screen tool has correct title and description", () => {
-      const tool = fakeServer.tools.get("op-add-screen")!;
+    it("op-acme_add-screen tool has correct title and description", () => {
+      const tool = fakeServer.tools.get("op-acme_add-screen")!;
       expect(tool.config.title).to.equal("Op: add-screen");
       expect(tool.config.description).to.equal("Add a new screen event sheet");
     });
 
-    it("op-add-screen inputSchema has SCREEN_NAME (required) and DEPTH (optional with default)", () => {
-      const tool = fakeServer.tools.get("op-add-screen")!;
+    it("op-acme_add-screen inputSchema has SCREEN_NAME (required) and DEPTH (optional with default)", () => {
+      const tool = fakeServer.tools.get("op-acme_add-screen")!;
       const schema = tool.config.inputSchema!;
       expect(schema).to.have.property("SCREEN_NAME");
       expect(schema).to.have.property("DEPTH");
     });
   });
 
-  // ── list-ops handler ─────────────────────────────────────────────────────────
+  // ── getLoadedOps() ───────────────────────────────────────────────────────────
+  // Replaces the old "list-ops handler" describe block: list-ops is no longer
+  // registered BY OpsRegistry (it moved to server.ts, #95 F6, reading this
+  // accessor instead of a tool handler here — see
+  // test/mcp/opsRegistry.multiProject.test.ts's T-O2 for the server.ts-level
+  // coverage of the tool itself).
 
-  describe("list-ops handler", () => {
+  describe("getLoadedOps()", () => {
     let fakeServer: ReturnType<typeof makeFakeServer>;
     let registry: OpsRegistry;
 
@@ -192,6 +205,7 @@ describe("OpsRegistry", () => {
       fakeServer = makeFakeServer();
       registry = new OpsRegistry({
         server: fakeServer.server,
+        projectId: PROJECT_ID,
         opsDir: SAMPLE_OPS_DIR,
         watch: false,
         applyRecipe: makeApplySpy().spy,
@@ -203,58 +217,35 @@ describe("OpsRegistry", () => {
       registry.stop();
     });
 
-    it("returns text containing op name for the valid op", async () => {
-      const handler = fakeServer.tools.get("list-ops")!.handler;
-      const result = await handler({}, FAKE_EXTRA);
-      const text = (result.content[0] as { text: string }).text;
-      expect(text).to.include("add-screen");
+    it("includes the valid op", () => {
+      const { ops } = registry.getLoadedOps();
+      expect(ops.map((o) => o.name)).to.include("add-screen");
     });
 
-    it("returns text containing load error for bad-schema", async () => {
-      const handler = fakeServer.tools.get("list-ops")!.handler;
-      const result = await handler({}, FAKE_EXTRA);
-      const text = (result.content[0] as { text: string }).text;
-      expect(text).to.include("load errors");
-      expect(text).to.include("bad-schema.json");
+    it("includes the load error for bad-schema", () => {
+      const { errors } = registry.getLoadedOps();
+      expect(errors.some((e) => e.file === "bad-schema.json")).to.equal(true);
     });
 
     it("reflects reconcile — shows newly added ops", () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ops-list-test-"));
       try {
-        const registry2 = new OpsRegistry({
-          server: fakeServer.server,
-          opsDir: tmpDir,
-          watch: false,
-          applyRecipe: makeApplySpy().spy,
-        });
-        registry2.start();
-
-        // Initially empty
-        const listHandler = fakeServer.tools.get("list-ops")!.handler;
-        // list-ops was already registered by the first registry; this is a shared fake server
-        // — use a separate server for this sub-test
-        const { server: srv2, tools: tools2 } = makeFakeServer();
+        const { server: srv2 } = makeFakeServer();
         const reg2 = new OpsRegistry({
           server: srv2,
+          projectId: PROJECT_ID,
           opsDir: tmpDir,
           watch: false,
           applyRecipe: makeApplySpy().spy,
         });
         reg2.start();
-
-        const listHandler2 = tools2.get("list-ops")!.handler;
+        expect(reg2.getLoadedOps().ops).to.have.length(0);
 
         writeOpFile(tmpDir, "new-op", MINIMAL_OP);
         reg2.reconcile();
 
-        const result = listHandler2({}, FAKE_EXTRA) as unknown as Promise<CallToolResult>;
-        // synchronous inspection after reconcile
         reg2.stop();
-        void listHandler;
-        return result.then((r) => {
-          const text = (r.content[0] as { text: string }).text;
-          expect(text).to.include("new-op");
-        });
+        expect(reg2.getLoadedOps().ops.map((o) => o.name)).to.include("new-op");
       } finally {
         fs.rmSync(tmpDir, { recursive: true });
       }
@@ -273,6 +264,7 @@ describe("OpsRegistry", () => {
       applySpy = makeApplySpy();
       registry = new OpsRegistry({
         server: fakeServer.server,
+        projectId: PROJECT_ID,
         opsDir: SAMPLE_OPS_DIR,
         watch: false,
         applyRecipe: applySpy.spy,
@@ -285,7 +277,7 @@ describe("OpsRegistry", () => {
     });
 
     it("valid args: substitutes {{TOKEN}} and calls applyRecipe with regenerate:true", async () => {
-      const handler = fakeServer.tools.get("op-add-screen")!.handler;
+      const handler = fakeServer.tools.get("op-acme_add-screen")!.handler;
       const result = await handler({ SCREEN_NAME: "Lobby" }, FAKE_EXTRA);
       // should not be an error
       expect(result.isError).to.not.equal(true);
@@ -299,7 +291,7 @@ describe("OpsRegistry", () => {
     });
 
     it("valid args with default DEPTH used when not provided", async () => {
-      const handler = fakeServer.tools.get("op-add-screen")!.handler;
+      const handler = fakeServer.tools.get("op-acme_add-screen")!.handler;
       await handler({ SCREEN_NAME: "Menu" }, FAKE_EXTRA);
       const files = applySpy.calls[0].recipe.files!;
       // default DEPTH=0 should appear in the comment
@@ -308,7 +300,7 @@ describe("OpsRegistry", () => {
     });
 
     it("missing required param returns mcpError and does NOT call applyRecipe", async () => {
-      const handler = fakeServer.tools.get("op-add-screen")!.handler;
+      const handler = fakeServer.tools.get("op-acme_add-screen")!.handler;
       const result = await handler({}, FAKE_EXTRA);
       expect(result.isError).to.equal(true);
       const text = (result.content[0] as { text: string }).text;
@@ -317,7 +309,7 @@ describe("OpsRegistry", () => {
     });
 
     it("unknown arg returns mcpError and does NOT call applyRecipe", async () => {
-      const handler = fakeServer.tools.get("op-add-screen")!.handler;
+      const handler = fakeServer.tools.get("op-acme_add-screen")!.handler;
       const result = await handler({ SCREEN_NAME: "X", UNKNOWN_PARAM: "oops" }, FAKE_EXTRA);
       expect(result.isError).to.equal(true);
       const text = (result.content[0] as { text: string }).text;
@@ -340,6 +332,7 @@ describe("OpsRegistry", () => {
       applySpy = makeApplySpy();
       registry = new OpsRegistry({
         server: fakeServer.server,
+        projectId: PROJECT_ID,
         opsDir: tmpDir,
         watch: false,
         applyRecipe: applySpy.spy,
@@ -353,22 +346,22 @@ describe("OpsRegistry", () => {
     });
 
     it("starts with no op-* tools when tmpDir is empty", () => {
-      // only list-ops should be registered
+      // No static list-ops (hoisted to server.ts, #95 F6) and no op files.
       const toolNames = [...fakeServer.tools.keys()];
-      expect(toolNames).to.deep.equal(["list-ops"]);
+      expect(toolNames).to.deep.equal([]);
     });
 
     it("add op file → new op-* tool registered after reconcile", () => {
       writeOpFile(tmpDir, "my-op", MINIMAL_OP);
       registry.reconcile();
-      expect(fakeServer.tools.has("op-my-op")).to.equal(true);
+      expect(fakeServer.tools.has("op-acme_my-op")).to.equal(true);
     });
 
     it("edit op file → update() called on existing tool after reconcile", () => {
       writeOpFile(tmpDir, "my-op", MINIMAL_OP);
       registry.reconcile();
 
-      const before = fakeServer.tools.get("op-my-op")!;
+      const before = fakeServer.tools.get("op-acme_my-op")!;
       expect(before.updates).to.have.length(0);
 
       // Change description
@@ -382,16 +375,16 @@ describe("OpsRegistry", () => {
     it("delete op file → remove() called and tool gone after reconcile", () => {
       writeOpFile(tmpDir, "my-op", MINIMAL_OP);
       registry.reconcile();
-      expect(fakeServer.tools.has("op-my-op")).to.equal(true);
+      expect(fakeServer.tools.has("op-acme_my-op")).to.equal(true);
 
-      const captured = fakeServer.tools.get("op-my-op")!;
+      const captured = fakeServer.tools.get("op-acme_my-op")!;
       deleteOpFile(tmpDir, "my-op");
       registry.reconcile();
 
       expect(captured.removed).to.equal(true);
       // tool map entry stays in fakeServer (we don't delete from the map on remove);
       // the registry's own tracking should reflect the removal
-      expect(fakeServer.tools.has("op-my-op")).to.equal(true); // still in fake map
+      expect(fakeServer.tools.has("op-acme_my-op")).to.equal(true); // still in fake map
       // But a new reconcile should not re-add it (it's gone from disk)
       registry.reconcile();
       expect(captured.updates).to.have.length(0); // no update after removal
@@ -402,21 +395,16 @@ describe("OpsRegistry", () => {
       registry.reconcile();
       writeOpFile(tmpDir, "op-b", MINIMAL_OP_2);
       registry.reconcile();
-      expect(fakeServer.tools.has("op-op-a")).to.equal(true);
-      expect(fakeServer.tools.has("op-op-b")).to.equal(true);
+      expect(fakeServer.tools.has("op-acme_op-a")).to.equal(true);
+      expect(fakeServer.tools.has("op-acme_op-b")).to.equal(true);
     });
 
-    it("malformed op file surfaces in list-ops errors but no tool registered", () => {
+    it("malformed op file surfaces in getLoadedOps() errors but no tool registered", () => {
       fs.writeFileSync(path.join(tmpDir, "broken.json"), "{ not valid json", "utf8");
       registry.reconcile();
-      expect(fakeServer.tools.has("op-broken")).to.equal(false);
-      // list-ops should mention the error
-      const listHandler = fakeServer.tools.get("list-ops")!.handler;
-      return listHandler({}, FAKE_EXTRA).then((result) => {
-        const text = (result.content[0] as { text: string }).text;
-        expect(text).to.include("load errors");
-        expect(text).to.include("broken.json");
-      });
+      expect(fakeServer.tools.has("op-acme_broken")).to.equal(false);
+      const { errors } = registry.getLoadedOps();
+      expect(errors.some((e) => e.file === "broken.json")).to.equal(true);
     });
   });
 
@@ -429,13 +417,14 @@ describe("OpsRegistry", () => {
       try {
         const registry = new OpsRegistry({
           server,
+          projectId: PROJECT_ID,
           opsDir: tmpDir,
           watch: false,
           applyRecipe: makeApplySpy().spy,
         });
         registry.start();
-        // Should only have list-ops (empty dir)
-        expect([...tools.keys()]).to.deep.equal(["list-ops"]);
+        // Empty dir, and no static list-ops any more (#95 F6) — nothing registered.
+        expect([...tools.keys()]).to.deep.equal([]);
         // stop() should be safe even with no watcher
         expect(() => registry.stop()).to.not.throw();
       } finally {
@@ -444,7 +433,7 @@ describe("OpsRegistry", () => {
     });
   });
 
-  // ── watch: true with non-existent dir ────────────────────────────────────────
+  // ── watch: true with non-existent opsDir ────────────────────────────────────
 
   describe("watch: true with non-existent opsDir", () => {
     it("start() succeeds without throwing — hot-reload silently skipped", () => {
@@ -453,6 +442,7 @@ describe("OpsRegistry", () => {
       const logs: string[] = [];
       const registry = new OpsRegistry({
         server,
+        projectId: PROJECT_ID,
         opsDir: nonExistent,
         watch: true,
         applyRecipe: makeApplySpy().spy,

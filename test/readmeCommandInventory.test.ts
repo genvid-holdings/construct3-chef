@@ -149,18 +149,22 @@ function parseRegistrations(src: string, callPattern: RegExp): McpTool[] {
 /**
  * Every **statically** registered MCP tool, across both modules that register one.
  *
- * Two modules, not one. `server.ts` registers 36 tools through its local `reg()`
- * wrapper; `opsRegistry.ts` registers `list-ops` via `server.registerTool`
- * directly, from an unconditional `start()` path — so it is just as static, and
- * a `server.ts`-only parse is structurally blind to it. That blindness fails
- * *both* ways: green while `list-ops` stays undocumented, and a false red the
- * day someone adds its correct row. See ADR 0031.
+ * Two modules are scanned, though only one still registers anything statically.
+ * `server.ts` registers every static tool — including `list-ops`, hoisted here
+ * from `opsRegistry.ts` (#95 F6), since a per-context "list-ops" registration
+ * doesn't scale to N registered projects — through its local `reg()`/`regP()`
+ * wrappers. `opsRegistry.ts` is still scanned too, even though since that hoist
+ * it registers nothing statically at all (only per-project `op-<id>_<name>`
+ * tools via a template literal — see below); the scan is kept general, rather
+ * than narrowed to one module, in case a future static tool lands there. See
+ * ADR 0031.
  *
  * Both patterns anchor on a **double-quoted** string literal. That is what
- * excludes the dynamic `op-<name>` tools, which are registered from a template
- * literal (`op-${op.name}`) — a per-project name *cannot* be a static literal,
- * so the anchor excludes them for the reason they are dynamic, rather than by
- * an exception list. Pinned by the negative-case test below.
+ * excludes the dynamic `op-<id>_<name>` tools, which are registered from a
+ * template literal (`` `op-${this.projectId}_${op.name}` ``) — a per-project
+ * name *cannot* be a static literal, so the anchor excludes them for the
+ * reason they are dynamic, rather than by an exception list. Pinned by the
+ * negative-case test below.
  */
 function registeredMcpTools(): McpTool[] {
   return [
@@ -244,14 +248,15 @@ describe("README MCP tool inventory", () => {
   });
 
   it("excludes dynamically-registered op-* tools, which vary per project", () => {
-    // `OpsRegistry` registers one `op-<name>` tool per file in the project's
-    // ops/ dir. A static guard cannot enumerate those, so it must not try.
+    // `OpsRegistry` registers one `op-<projectId>_<name>` tool per file in the
+    // project's ops/ dir. A static guard cannot enumerate those, so it must
+    // not try.
     const names = registeredMcpTools().map((t) => t.name);
     expect(
       names.filter((n) => n.startsWith("op-")),
       "dynamic op-* tools leaked into the static set",
     ).to.deep.equal([]);
-    expect(names, "the static tool registered in opsRegistry.ts is missing").to.include("list-ops");
+    expect(names, "the static tool registered in server.ts is missing").to.include("list-ops");
 
     // Positive control for the exclusion: widening the same scan to accept a
     // template literal DOES find the dynamic registration. Without this, the
@@ -260,7 +265,7 @@ describe("README MCP tool inventory", () => {
     const ops = readFileSync(OPS_REGISTRY_PATH, "utf-8");
     const widened = [...ops.matchAll(/\bregisterTool\(\s*\n?\s*[`"]([^`"]+)[`"]/g)].map((m) => m[1]);
     expect(widened, "widened scan no longer sees the dynamic op registration — the pattern has gone stale").to.include(
-      "op-${op.name}",
+      "op-${this.projectId}_${op.name}",
     );
   });
 

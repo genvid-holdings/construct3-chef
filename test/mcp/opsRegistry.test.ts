@@ -135,7 +135,7 @@ const MINIMAL_OP_2 = {
 // constructions. Multi-project namespace behavior (T-O1/T-O2 — two DIFFERENT
 // project ids, collision, and cross-project mutation isolation) lives in
 // test/mcp/opsRegistry.multiProject.test.ts instead; this file stays focused
-// on OpsRegistry's own per-instance behavior (#95 F6).
+// on OpsRegistry's own per-instance behavior (#95).
 const PROJECT_ID = "acme";
 
 describe("OpsRegistry", () => {
@@ -163,7 +163,7 @@ describe("OpsRegistry", () => {
       registry.stop();
     });
 
-    it("does NOT register a static list-ops tool (hoisted to server.ts, #95 F6)", () => {
+    it("does NOT register a static list-ops tool (hoisted to server.ts, #95)", () => {
       expect(fakeServer.tools.has("list-ops")).to.equal(false);
     });
 
@@ -192,7 +192,7 @@ describe("OpsRegistry", () => {
 
   // ── getLoadedOps() ───────────────────────────────────────────────────────────
   // Replaces the old "list-ops handler" describe block: list-ops is no longer
-  // registered BY OpsRegistry (it moved to server.ts, #95 F6, reading this
+  // registered BY OpsRegistry (it moved to server.ts, #95, reading this
   // accessor instead of a tool handler here — see
   // test/mcp/opsRegistry.multiProject.test.ts's T-O2 for the server.ts-level
   // coverage of the tool itself).
@@ -346,7 +346,7 @@ describe("OpsRegistry", () => {
     });
 
     it("starts with no op-* tools when tmpDir is empty", () => {
-      // No static list-ops (hoisted to server.ts, #95 F6) and no op files.
+      // No static list-ops (hoisted to server.ts, #95) and no op files.
       const toolNames = [...fakeServer.tools.keys()];
       expect(toolNames).to.deep.equal([]);
     });
@@ -423,7 +423,7 @@ describe("OpsRegistry", () => {
           applyRecipe: makeApplySpy().spy,
         });
         registry.start();
-        // Empty dir, and no static list-ops any more (#95 F6) — nothing registered.
+        // Empty dir, and no static list-ops any more (#95) — nothing registered.
         expect([...tools.keys()]).to.deep.equal([]);
         // stop() should be safe even with no watcher
         expect(() => registry.stop()).to.not.throw();

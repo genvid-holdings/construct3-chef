@@ -523,7 +523,7 @@ describe("MCP server multi-project behavior (#95, Seam C)", () => {
       const ctxExplicit = await createProjectContext(DEFAULT_ID, rootExplicit);
       ctxOmit.watcher = makeFakeWatcher(0) as any;
       ctxExplicit.watcher = makeFakeWatcher(0) as any;
-      // list-ops reads ctx.ops (#95 F6) — wire a minimal one per root, pointed
+      // list-ops reads ctx.ops (#95) — wire a minimal one per root, pointed
       // at a nonexistent ops/ dir so both sides deterministically report "no
       // ops" (loadOpsFromDir treats an absent dir as empty, never an error).
       ctxOmit.ops = new OpsRegistry({

@@ -97,7 +97,7 @@ exposeDocs(server, __pkgDir, { docsDir: "wiki", recursive: true });
 // same two-step shape setupWatchers used before this context existed.
 let defaultCtx: ProjectContext = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
 
-// The launch-fixed set of registered projects (#95 F2/F3). Always contains at
+// The launch-fixed set of registered projects (#95). Always contains at
 // least `ctx` as its default — kept in lockstep with every wholesale `ctx`
 // reassignment below (startServer and the __setProjectRoot/__setExtractedDir/
 // __resetTestState test seams) so `list-projects` never reports a registry
@@ -512,7 +512,7 @@ regP(
     }),
 );
 
-// Hoisted out of OpsRegistry (#95 F6): OpsRegistry is now one-per-project
+// Hoisted out of OpsRegistry (#95): OpsRegistry is now one-per-project
 // (see startServer below), so a static per-context "list-ops" registration
 // would collide across N registered projects. Registered once, here, like
 // every other project-scoped tool — the `project` selector (via `regP`)
@@ -2135,7 +2135,7 @@ export function __resetTestState(): void {
   defaultCtx = new ProjectContext(DEFAULT_PROJECT_ID, process.cwd(), DEFAULT_CHEF_CONFIG);
   reseedRegistry();
 }
-// Installs an arbitrary caller-built multi-project registry (#95 F5,
+// Installs an arbitrary caller-built multi-project registry (#95,
 // T-X4/T-X5/T-X6/T-C6) — the seam __setProjectRoot/__setExtractedDir don't
 // provide, since both always reseed a SINGLE-entry registry from `defaultCtx`
 // (see reseedRegistry below). Reassigns `REGISTRY` and `defaultCtx` together,
@@ -2174,24 +2174,31 @@ export async function startServer(
   overrides?: Partial<ChefConfig>,
   defaultProject?: string,
 ): Promise<void> {
-  // Launch surface precedence (#95 F3): repeated `--project-dir` >
+  // Launch surface precedence (#95): repeated `--project-dir` >
   // `C3_PROJECT_DIRS` > (fall through to the untouched `C3_PROJECT_DIR` /
   // discovery / cwd path, preserved byte-for-byte by resolveLaunchRoots for
   // 0-or-1 resolved specs — see that function's own docstring).
   REGISTRY = await buildProjectRegistry(projectDirs, overrides, defaultProject, {
     log: (msg) => console.error(msg),
   });
-  // Every project-scoped tool now accepts a per-call `project` selector and
+  // Every project-scoped tool accepts a per-call `project` selector and
   // resolves its ProjectContext from REGISTRY at call time (see `regP`,
-  // ADR wiki/decisions/0034). `defaultCtx` — the sole module-level context
-  // this file otherwise carries — is still what startup validation,
-  // auto-generation, and the file watcher wire up below: a non-default
-  // registered project gets no startup validation/auto-generation/watcher of
-  // its own, it's a registry entry, reachable by every regP tool, but not a
-  // live one at startup. The ops registry is the one exception — every
-  // registered project gets its own (#95 F6, below), because a project's
-  // op-<id>_<opName> tools are read from ITS OWN ops/ dir and must exist for
-  // op-* tool calls to have anything to resolve, regardless of default-ness.
+  // ADR wiki/decisions/0034).
+  //
+  // What is per-project and what is not, precisely — the two halves have
+  // drifted apart once already (#95):
+  //   - file watcher  — PER-PROJECT, via wireAllProjects() below. Every
+  //     context needs one or its first ctx.watcher.txId read throws.
+  //   - ops registry  — PER-PROJECT, same loop. A project's op-<id>_<opName>
+  //     tools are read from ITS OWN ops/ dir and must exist for an op-* call
+  //     to resolve at all.
+  //   - startup validation and auto-generation — DEFAULT ONLY, deliberately.
+  //     A non-default project's extracted/ may be stale at launch until
+  //     `regenerate` is run against it; tools still work and report staleness.
+  //
+  // `defaultCtx` is the sole module-level context this file still carries,
+  // and it exists for that last bullet plus the test seams — not as a
+  // fallback the tool surface reads.
   defaultCtx = REGISTRY.get(REGISTRY.defaultId)!;
 
   // Startup validation — warn but don't hard-fail

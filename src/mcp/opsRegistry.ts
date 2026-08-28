@@ -58,7 +58,7 @@ export interface RegisterableServer {
 export interface OpsRegistryDeps {
   server: RegisterableServer;
   /**
-   * The owning project's id (`ProjectContext.id`, #95 F6). Every op tool this
+   * The owning project's id (`ProjectContext.id`, #95). Every op tool this
    * registry registers is named `op-<projectId>_<opName>` — the `_` separator
    * (never `-`) is load-bearing: op names match `/^[a-z0-9][a-z0-9-]*$/i` and
    * project ids allow `-`, so `op-<id>-<name>` is genuinely ambiguous (project
@@ -121,7 +121,7 @@ export class OpsRegistry {
    * Run the initial reconcile to register this project's op-* tools, then
    * start watching (if configured). `list-ops` is NOT registered here — it
    * moved to server.ts as a normal `regP` tool reading {@link getLoadedOps}
-   * (#95 F6): a static per-context tool registration doesn't scale to N
+   * (#95): a static per-context tool registration doesn't scale to N
    * registered projects (N contexts would each try to register the same
    * static "list-ops" name), so server.ts registers it once and resolves the
    * project via its usual `project` selector instead.
@@ -137,7 +137,7 @@ export class OpsRegistry {
   }
 
   /**
-   * Current ops + load errors, for the `list-ops` tool (server.ts, #95 F6).
+   * Current ops + load errors, for the `list-ops` tool (server.ts, #95).
    * Returns the live arrays directly; callers must not mutate them —
    * `reconcile()` replaces both wholesale on the next call, never mutates in
    * place.

@@ -151,7 +151,7 @@ function parseRegistrations(src: string, callPattern: RegExp): McpTool[] {
  *
  * Two modules are scanned, though only one still registers anything statically.
  * `server.ts` registers every static tool — including `list-ops`, hoisted here
- * from `opsRegistry.ts` (#95 F6), since a per-context "list-ops" registration
+ * from `opsRegistry.ts` (#95), since a per-context "list-ops" registration
  * doesn't scale to N registered projects — through its local `reg()`/`regP()`
  * wrappers. `opsRegistry.ts` is still scanned too, even though since that hoist
  * it registers nothing statically at all (only per-project `op-<id>_<name>`

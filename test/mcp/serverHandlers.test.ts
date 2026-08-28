@@ -155,7 +155,7 @@ describe("MCP server handler response shaping", () => {
   });
 
   // ── 1b. list-projects: reflects the single-entry registry __setProjectRoot
-  //       reseeds (#95 F2) ──────────────────────────────────────────────────
+  //       reseeds (#95) ──────────────────────────────────────────────────
 
   it("list-projects reports the sole registered project as default", async () => {
     const handler = __getHandler("list-projects")!;

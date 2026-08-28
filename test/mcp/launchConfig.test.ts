@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { resolveLaunchSpecs, resolveLaunchRoots, buildProjectRegistry } from "../../src/mcp/launchConfig.js";
 
 /**
- * launchConfig.ts is the #95 F3 launch surface: it turns repeated
+ * launchConfig.ts is the #95 launch surface: it turns repeated
  * `--project-dir [<id>=]<path>` flags / `C3_PROJECT_DIRS` into the
  * `ProjectRegistry` `startServer` builds at launch. These tests exercise the
  * precedence chain and registry-building logic directly, WITHOUT calling

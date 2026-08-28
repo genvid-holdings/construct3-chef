@@ -102,7 +102,7 @@ const EXPLICIT_ID_RE = /^([^/\\=]+)=(.+)$/;
  * Split a raw `--project-dir`/`C3_PROJECT_DIRS` spec into its optional
  * explicit id and path portion, per {@link EXPLICIT_ID_RE}. `id` is
  * `undefined` for a bare path. The launch-config parser (`launchConfig.ts`,
- * #95 F3) uses this to recover the actual root path for a spec whose id it
+ * #95) uses this to recover the actual root path for a spec whose id it
  * has already derived via {@link deriveProjectId} — the two stay in the same
  * module so the spec grammar can't drift between id extraction and path
  * extraction.

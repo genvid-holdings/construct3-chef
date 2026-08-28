@@ -6,7 +6,7 @@ import { createProjectContext, type ProjectContext } from "./projectContext.js";
 import type { ChefConfig } from "../c3/chefConfig.js";
 
 /**
- * Launch-time root resolution for the MCP server (#95 F3): turns the
+ * Launch-time root resolution for the MCP server (#95): turns the
  * `--project-dir [<id>=]<path>` / `C3_PROJECT_DIRS` launch surface into the
  * ordered `{id, root}` pairs `startServer` registers. Split out of
  * `server.ts` so the precedence logic is unit-testable without booting the

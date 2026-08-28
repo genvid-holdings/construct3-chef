@@ -143,3 +143,20 @@ Semantically defensible — it mutates no source file. Rejected because it force
 the guard to carry an exception ("`generate-sids` may sit in Read tools despite its
 annotation"), and a placement assertion with one exception is a placement
 assertion that will acquire a second.
+
+## Superseding note (2026-08-27)
+
+[#95](https://github.com/GenvidTechnologies/construct3-chef/issues/95) (ADR
+[0034](0034-mcp-server-multi-project-support.md)) hoisted `list-ops` out of
+`OpsRegistry` — a per-context "list-ops" registration doesn't scale to N
+registered projects — into a normal `regP`-registered tool in `server.ts`.
+`src/mcp/opsRegistry.ts` now registers **no** static tool at all; its only
+`registerTool` call is the dynamic, template-literal-named `op-<projectId>_
+<opName>` tool, already excluded by the double-quote anchor this record
+describes. **The static MCP tool inventory guard now has only one module with
+a static registration** (`server.ts`); the "spans two modules" framing above
+is historical, describing the shape at the time this ADR was accepted rather
+than the current parse target. The guard code itself (`registeredMcpTools()`
+in `test/readmeCommandInventory.test.ts`) still scans both modules
+deliberately, "in case a future static tool lands there" — so no code change
+followed from this note, only the description above.

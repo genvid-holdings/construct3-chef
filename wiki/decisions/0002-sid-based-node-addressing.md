@@ -37,3 +37,7 @@ See [CLAUDE.md](../../CLAUDE.md) § "SIDs are the addressing system" and [wiki/r
 - The SID context must be initialized before any new SID is generated; uninitialized generation risks SID collision with the existing project.
 - The `.dsl.idx.txt` index is the primary read-surface for SID discovery; `resolve-anchor` provides a search interface over it.
 - When a new SID is generated (e.g. for a newly inserted event), the `sid-registry.txt` must be regenerated to keep the context current for subsequent applies.
+
+## Superseded mechanism (2026-08-27)
+
+The **module-level SID context** described above (`initSidContext`/`resetSidContext`) no longer exists in `src/c3/sidUtils.ts`. It was replaced by a stateless minter, `mintUniqueSid(usedSids: Set<number>)`: callers pass a caller-owned `Set` of already-used SIDs (typically seeded from `sid-registry.txt` via `readRegistryFile`), and the function mutates that Set with the newly-minted SID before returning — no `init`/`reset` pair, no module-level state to go stale. `recipeApplier.applyParsed` no longer wraps its apply call in `initSidContext`/`resetSidContext`; callers thread the `Set` explicitly instead. The **decision this record documents is unaffected** — SIDs are still the addressing mechanism, uniqueness is still guaranteed against the project's existing registry, and the `indexInParent` staleness rationale (gotcha #34) is unchanged. Only the uniqueness-tracking *mechanism* moved from implicit module state to an explicit parameter. See CLAUDE.md § "SIDs are the addressing system" for the current API.

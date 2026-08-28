@@ -128,6 +128,8 @@ Configure it in your MCP client (example for Claude Desktop or similar):
 
 ### Available MCP tools
 
+The server can host more than one C3 project root at once (see [Multi-project support](#multi-project-support) below). Every tool listed here except `list-projects` accepts an optional `project` id parameter to target a non-default registered project; omit it to target the default project. `txId` values are the composite `<projectId>:<counter>` string described in [Optimistic concurrency](#optimistic-concurrency).
+
 **Read tools** (read-only, idempotent):
 
 | Tool | Description |
@@ -155,8 +157,9 @@ Configure it in your MCP client (example for Claude Desktop or similar):
 | `diff-addon-aces` | Diff the ACE contract between two addon versions: added/removed ACEs plus changed param signatures |
 | `scan-addon-usage` | Find where a plugin, behavior, or effect addon is used: object/family presence, event-sheet ACE call sites, and expression references; `from` reports blast radius against a prior version |
 | `preview-addon-metadata-sync` | Dry-run report of `version`/`author` drift between bundled `.c3addon` packages and `project.c3proj.usedAddons` — the read-only preview for `sync-addon-metadata`. Optional `addon` param scopes to one addon by id. Never writes |
-| `list-ops` | List user-defined ops (parameterized recipe templates) with their parameters |
-| `get-state` | Return server state: txId and extractedDirty flag |
+| `list-ops` | List the target project's user-defined ops (parameterized recipe templates) with their parameters |
+| `get-state` | Return server state for the target project: txId and extractedDirty flag |
+| `list-projects` | List every project registered at launch (id, root, extractedDir, default). The only tool with no `project` parameter — it enumerates the registry itself |
 
 **Mutate tools** (modify source files):
 
@@ -187,7 +190,11 @@ Configure it in your MCP client (example for Claude Desktop or similar):
 
 ### Optimistic concurrency
 
-The server maintains a `txId` counter that increments on every source-file mutation. Read the current `txId` from `validate-recipe` or `get-state`, then pass it to `apply-recipe` or `sync-project`. If the project changed between validate and apply, the server rejects the operation and returns the current `txId` so you can re-validate.
+Each registered project maintains its own `txId` counter that increments on every source-file mutation, emitted and accepted on the wire as a composite `<projectId>:<counter>` string (e.g. `alpha:12`) rather than a bare integer — a bare integer would make an equal counter across two projects, the common case, silently acceptable against the wrong one. Read the current `txId` from `validate-recipe` or `get-state`, then pass it to `apply-recipe` or `sync-project`. If the target project changed between validate and apply, or the token names a different project than the call's `project` parameter, the server rejects the operation and returns the current `txId` so you can re-validate.
+
+### Multi-project support
+
+`server` can host more than one C3 project root in a single process: pass `--project-dir` repeatedly (each optionally prefixed `<id>=`), or set `C3_PROJECT_DIRS` (a `path.delimiter`-separated list of the same `[<id>=]<path>` specs). A bare `--project-dir` or `C3_PROJECT_DIR` continues to register exactly one project, unchanged. Every tool call targets exactly one project, selected by the optional `project` id parameter (see `list-projects` to discover registered ids); user-defined ops are namespaced per project as `op-<projectId>_<opName>`. See [wiki/reference/cli.md](./wiki/reference/cli.md#server) for the full launch-config precedence and [wiki/decisions/0034](./wiki/decisions/0034-mcp-server-multi-project-support.md) for the design.
 
 ## Project structure expected
 

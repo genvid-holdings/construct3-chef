@@ -21,7 +21,7 @@ npx construct3-chef <subcommand> [options]
 
 | Option | Default | Description |
 | ------ | ------- | ----------- |
-| `--project-dir <path>` | `cwd` | Root directory of the C3 project (must contain `project.c3proj`) |
+| `--project-dir <path>` | `cwd` | Root directory of the C3 project (must contain `project.c3proj`). A `string` option for every subcommand **except** `server`, where it is repeatable — see [Multi-root launch config](#multi-root-launch-config). |
 
 ---
 
@@ -96,6 +96,38 @@ npx @genvidtech/construct3-chef server
 The server auto-generates `extracted/` on startup if it does not exist. It warns but does not fail if `project.c3proj` is not found.
 
 See [README.md](../../README.md#mcp-server) for the full list of MCP tools.
+
+### Multi-root launch config
+
+`server` can host more than one C3 project root in a single process (#95, ADR [0034](../decisions/0034-mcp-server-multi-project-support.md)). **This repeatable form is server-subcommand-only** — every other subcommand's `--project-dir` stays the single `string` option described above. Precedence, highest first:
+
+1. Repeated `--project-dir [<id>=]<path>` flags — pass the flag more than once. Each spec is either a bare path or an explicit `<id>=<path>` form; the id, if given, always wins over derivation.
+2. `C3_PROJECT_DIRS` environment variable — a `path.delimiter`-separated list of the same `[<id>=]<path>` spec form (`;` on Windows, `:` elsewhere). Used when repeating a CLI flag isn't possible, e.g. a bundled MCP host config.
+3. Falls through to the single-root `C3_PROJECT_DIR` / discovery / cwd precedence chain above, **preserved byte-for-byte** — including the cwd-fallback stderr warning — for the case of zero or one resolved spec. An operator who never adopts the multi-root surface sees no behavior change.
+
+With **two or more** specs, every root is resolved explicitly (no discovery call at all — there is nothing left to discover), and each gets a derived id unless overridden:
+
+- An explicit `<id>=` prefix always wins.
+- Otherwise the id is the path's basename, lowercased, with any character outside `[a-z0-9-]` collapsed to `-` (runs of `-` collapsed, leading/trailing `-` trimmed; falls back to `"project"` if that leaves nothing).
+- A derived id colliding with one already in use gets a `-2`, `-3`, … suffix, with a warning to **stderr** (never stdout — stdout is reserved for the MCP protocol stream).
+
+An optional `--default-project <id>` names which registered project a tool call targets when its `project` parameter is omitted; it defaults to the **first** resolved spec. Project ids may not contain `:` — that character is reserved as the separator in the composite `<projectId>:<counter>` `txId` wire format (see [README.md § Optimistic concurrency](../../README.md#optimistic-concurrency)).
+
+```bash
+# Two explicit roots, ids derived from each path's basename
+npx @genvidtech/construct3-chef server --project-dir /path/to/game-a --project-dir /path/to/game-b
+
+# Explicit ids, one marked default
+npx @genvidtech/construct3-chef server \
+  --project-dir alpha=/path/to/game-a \
+  --project-dir beta=/path/to/game-b \
+  --default-project beta
+
+# Env var form, useful in a bundled MCP host config
+C3_PROJECT_DIRS="alpha=/path/to/game-a;beta=/path/to/game-b" npx @genvidtech/construct3-chef server
+```
+
+Only the **default** registered project gets startup validation, `extracted/` auto-generation, and a live source-file watcher at launch today; every registered project's `list-ops`/`op-<projectId>_<opName>` tools are still wired up regardless of default-ness. Use the `list-projects` MCP tool to enumerate what a running server has registered.
 
 ---
 

@@ -48,4 +48,4 @@ Two weaker alternatives were rejected:
 - Editing a mutate tool requires wrapping its writes in `watcher.suppress` — and `watcher.expect(absPath)` for any path written outside that call — or the watcher will spuriously mark state dirty and bump `txId`.
 - `CancelledError` handling in every long tool must still set `extractedDirty = true` and call `watcher.bump()` when source was already written before cancellation.
 - The `regenerate` tool is the exception: it sets `extractedDirty = false` on success but does **not** bump `txId` (regeneration does not mutate source).
-- Multi-root support (> 1 project per server process) is tracked in [#95](https://github.com/GenvidTechnologies/construct3-chef/issues/95); the single `PROJECT` module-level handle would need to become per-request state.
+- Multi-root support (> 1 project per server process) shipped in [#95](https://github.com/GenvidTechnologies/construct3-chef/issues/95); the single `PROJECT` module-level handle became per-request state as `ProjectContext`, one instance per registered project, with `txId`/`extractedDirty`/`ReadWriteLock` all following it — see ADR [0034](0034-mcp-server-multi-project-support.md).

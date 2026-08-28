@@ -281,3 +281,11 @@ See the [wiki index](../index.md) for the other sections.
   generation step — the docs resource is no longer pack-time-only, no longer
   flattened by a local generator, and its names are now path-shaped
   ([#207](https://github.com/GenvidTechnologies/construct3-chef/issues/207))
+* [0034. MCP server multi-project support](0034-mcp-server-multi-project-support.md) -
+  One server process hosts N C3 project roots; every tool call targets exactly
+  one project via a per-call `project` selector (`ProjectContext` +
+  `ProjectRegistry`), a readable composite `<projectId>:<counter>` txId
+  format, and per-project `op-<projectId>_<opName>` tool names. Records all
+  eleven declined alternatives and the general one-lock-acquisition-per-call
+  rule
+  ([#95](https://github.com/GenvidTechnologies/construct3-chef/issues/95))

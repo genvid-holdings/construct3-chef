@@ -26,6 +26,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP chef config is now launch-fixed per project context.** The
+  `navigation-graph` tool resolved its nav convention from a fresh
+  `loadChefConfig(ctx.root)` on **every call**, while every other consumer read
+  `ctx.config` — loaded once per context by `createProjectContext`. The handler
+  now reads `ctx.config` like the rest. Two consequences worth stating rather
+  than discovering: editing a project's `construct3-chef.config.json` **while the
+  MCP server is running** no longer changes the `navigation-graph` result
+  mid-session (it never changed `extractedDir` or `ops.dir`, which are wired into
+  the file watcher and `OpsRegistry` at launch — that asymmetry was the defect);
+  and the per-call reload passed no `overrides` argument, which
+  `createProjectContext` merges, so the two paths were not guaranteed to agree
+  even in principle. Restart the server to pick up a config edit.
+  ([#211](https://github.com/GenvidTechnologies/construct3-chef/issues/211),
+  ADR [`0035`](wiki/decisions/0035-mcp-chef-config-is-launch-fixed-per-context.md))
+
+  > `DEFAULT_CHEF_CONFIG` is deliberately **not** unified along with it. Its use
+  > by the `__setProjectRoot`/`__resetTestState` test seams is defended by the
+  > comment above `__setProjectRoot`, so changing it would alter test-harness
+  > behaviour rather than production behaviour.
+
 ## [1.2.0] - 2026-08-25
 
 ### Changed

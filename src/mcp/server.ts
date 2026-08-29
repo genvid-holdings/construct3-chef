@@ -44,7 +44,7 @@ import {
   discoverAndPlanImageCopies,
   cloneSprite,
 } from "../c3/spriteScaffold.js";
-import { loadChefConfig, type ChefConfig } from "../c3/chefConfig.js";
+import type { ChefConfig } from "../c3/chefConfig.js";
 import {
   buildLayoutEventSheetMap,
   findGoToLayoutCalls,
@@ -499,13 +499,17 @@ regP(
   },
   async (ctx, { format, offset, limit }) =>
     ctx.rwlock.read(async () => {
-      const config = await loadChefConfig(ctx.root);
       const layoutEventSheetMap = buildLayoutEventSheetMap(ctx.project.layoutsDir);
       const sheetToLayout: Record<string, string> = {};
       for (const [layoutName, sheetName] of Object.entries(layoutEventSheetMap)) {
         sheetToLayout[sheetName] = layoutName;
       }
-      const navEntries = findGoToLayoutCalls(ctx.extractedDir, resolveNavConvention(config));
+      // Chef config is launch-fixed per context (#211): resolve the nav
+      // convention from ctx.config, the config this ProjectContext loaded at
+      // construction, never a fresh per-call load. A reload would also drop the
+      // `overrides` createProjectContext merges, so the two are not guaranteed
+      // to agree even in principle. See wiki/decisions/0035.
+      const navEntries = findGoToLayoutCalls(ctx.extractedDir, resolveNavConvention(ctx.config));
       const text =
         format === "plantuml" ? generatePlantUML(navEntries, sheetToLayout) : formatNavTable(navEntries, sheetToLayout);
       return paginatedResponse(ctx, text, offset, limit);

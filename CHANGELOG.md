@@ -26,6 +26,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **One MCP server process now hosts N Construct 3 project roots.** Every tool
+  call still targets exactly one project — there is no fan-out and no
+  cross-project operation, by explicit design constraint. Roots are fixed at
+  launch, resolved by precedence: repeated `--project-dir [<id>=]<path>` (the
+  `server` subcommand only — the global `--project-dir` stays a plain string
+  everywhere else) > `C3_PROJECT_DIRS` (`path.delimiter`-separated) >
+  `C3_PROJECT_DIR` (unchanged) > `resolveRootFolder` marker discovery
+  (unchanged) > cwd, plus an optional `--default-project <id>`. An explicit
+  `<id>=` prefix always wins over derivation; a derived id is the sanitized
+  basename of the root, deduped with a `-2`/`-3` suffix plus a stderr warning
+  on collision. Project ids may not contain `:` (reserved as the txId
+  separator). **An operator who supplies zero or one spec sees no behaviour
+  change** — that path routes through the exact pre-#212 `resolveRootFolder`
+  call, byte-for-byte, including its cwd-fallback stderr warning.
+  ([#212](https://github.com/GenvidTechnologies/construct3-chef/pull/212),
+  closes [#95](https://github.com/GenvidTechnologies/construct3-chef/issues/95),
+  ADR [`0034`](wiki/decisions/0034-mcp-server-multi-project-support.md))
+- **`list-projects`** — enumerates the registered projects (id, root,
+  `extractedDir`, which one is default). It is the sole tool kept on the plain
+  registration path rather than the per-project one every other tool now
+  carries, since it reports on the registry itself rather than belonging to
+  one project.
+  ([#212](https://github.com/GenvidTechnologies/construct3-chef/pull/212))
+
+### Changed
+
+- **Three breaking changes to the MCP tool surface**, all from the
+  multi-project support above:
+  1. Every project-scoped tool schema gains an optional `project` parameter
+     (described as `Project id (see list-projects). Omit for the default project.`).
+     Selection is always by **id**, never by path — a selector naming an
+     unregistered id, including anything that merely looks like a path
+     (`"../other"`, `"C:/tmp"`), returns an error enumerating the known ids
+     rather than being opened as a root. `--project-dir` is operator-set at
+     launch; a tool parameter is model-set, so the two are deliberately not
+     symmetric.
+  2. **The `txId` wire format changed from a bare integer to a composite
+     `<projectId>:<counter>` string — a txId obtained from `1.2.0` is not
+     valid against this server.** This is not cosmetic: under multi-project,
+     two projects sitting at the same counter value is the common case, not
+     an edge case, since both start at 0 — a bare integer minted for project
+     alpha would be silently accepted against project beta. Rejections now
+     carry the current token as a `txId: <current>` footer.
+  3. **Every op tool is renamed `op-<opName>` → `op-<projectId>_<opName>` — for
+     the default project too**, not only for newly-registered ones. `_` is
+     the separator because op names match `/^[a-z0-9][a-z0-9-]*$/i` and
+     project ids allow `-`, so `op-<id>-<name>` would be genuinely ambiguous.
+     `list-ops` moved out of `OpsRegistry` into a normal project-scoped tool.
+  **Zero npm barrel exposure**, worth stating plainly because `feat!` suggests
+  otherwise: `ProjectContext`, `ProjectRegistry`, `txToken.ts`, and
+  `launchConfig.ts` are all off `src/index.ts`, so this is a **minor** bump for
+  the published *library* — consumers importing `@genvidtech/construct3-chef`
+  are unaffected. Only MCP clients break.
+
+  A v1 limit worth stating rather than discovering: startup validation and
+  auto-generation still run for the **default project only**, so a
+  non-default project's `extracted/` may be stale at launch until
+  `regenerate` is run against it. The tools work regardless — they report
+  staleness rather than silently serving stale output.
+  ([#212](https://github.com/GenvidTechnologies/construct3-chef/pull/212),
+  closes [#95](https://github.com/GenvidTechnologies/construct3-chef/issues/95),
+  ADR [`0034`](wiki/decisions/0034-mcp-server-multi-project-support.md))
+- Bumped `@genvidtech/mcp-utils` to `^0.9.0`. Verified inert for chef today —
+  the full `dist/` diff is a `walkFiles` docstring path fix, a
+  `resolveRootFolder` reimplementation over a new plural
+  `resolveRootFolders` with a byte-identical ambiguous-discovery error
+  message, and two purely additive exports (`resolveRootFolders`,
+  `txToken`). See `wiki/process/leaf-dependency-ledger.md`'s `0.9.0` entry
+  for why the new `txToken` module is not adopted in this bump
+  ([#217](https://github.com/GenvidTechnologies/construct3-chef/issues/217)), and
+  what `resolveRootFolders` unblocks
+  ([#216](https://github.com/GenvidTechnologies/construct3-chef/issues/216)).
+
 ### Fixed
 
 - **MCP chef config is now launch-fixed per project context.** The

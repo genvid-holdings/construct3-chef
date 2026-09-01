@@ -289,3 +289,12 @@ See the [wiki index](../index.md) for the other sections.
   eleven declined alternatives and the general one-lock-acquisition-per-call
   rule
   ([#95](https://github.com/GenvidTechnologies/construct3-chef/issues/95))
+* [0035. MCP chef config is launch-fixed per project context](0035-mcp-chef-config-is-launch-fixed-per-context.md) -
+  The `navigation-graph` handler loaded `construct3-chef.config.json` fresh on
+  every call while every other consumer read the copy `createProjectContext`
+  loaded once per context. The per-call path was collapsed into the cached one
+  rather than the reverse: `extractedDir` and `ops.dir` are wired into the
+  file watcher and `OpsRegistry` at launch, so config that cannot hot-reload
+  sets the ceiling for config that can. `DEFAULT_CHEF_CONFIG`'s use by the
+  test seams is deliberate and was left alone
+  ([#211](https://github.com/GenvidTechnologies/construct3-chef/issues/211))

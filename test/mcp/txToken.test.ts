@@ -41,7 +41,8 @@ describe("txToken", () => {
       expect(parsed).to.deep.equal({ id: "alpha", counter: 0 });
     });
 
-    // Malformed-input table (task P3 point 2).
+    // Malformed-input table — mirrors the table in src/mcp/txToken.ts's
+    // parseTxToken docstring.
     const malformed: Array<[label: string, input: string]> = [
       ["no colon at all", "alpha"],
       ["empty counter segment", "alpha:"],

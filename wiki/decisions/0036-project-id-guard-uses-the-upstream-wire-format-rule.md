@@ -7,7 +7,7 @@ description: >-
   unparseable by the wire format's other named consumer. The guard now routes
   through upstream's `isValidProjectId`, a strict superset of the old check.
   Adopting upstream's txToken *codec* is deliberately deferred, gated on
-  mcp-utils#25, because it would collapse eight distinct parse diagnostics into
+  mcp-utils#25, because it would collapse three distinct parse diagnostics into
   a bare `null`
   ([#217](https://github.com/GenvidTechnologies/construct3-chef/issues/217))
 tags: [decision, architecture, mcp, upstream-adoption]
@@ -27,8 +27,8 @@ ADR [0034](0034-mcp-server-multi-project-support.md) introduced the composite
 `<projectId>:<counter>` txId wire format and gave `src/mcp/txToken.ts` its
 codec. Days later `@genvidtech/mcp-utils@0.9.0` shipped a `txToken` module of
 its own whose docstring names **construct3-chef** and **c3-domain-manager** as
-its two intended consumers, citing chef's own ADR
-[0005](0005-mcp-server-optimistic-concurrency-model.md) and describing `:` as a fixed wire
+its two intended consumers, citing its own
+`wiki/decisions/0005-tx-token-wire-format.md` and describing `:` as a fixed wire
 contract. Two implementations of one cross-repo wire format is exactly the drift
 trap `CLAUDE.md` § "Leaf dependencies" warns about, so #217 was filed to
 reconcile them.
@@ -82,22 +82,49 @@ were measured rather than read.
 Deferred, gated on
 [mcp-utils#25](https://github.com/GenvidTechnologies/mcp-utils/issues/25).
 
-chef's `parseTxToken` returns a discriminated `{error: string}` and produces
-**eight** distinct messages, which `compareTxToken` renders straight into the
-`mcpError` a client sees — whether the counter was malformed, the project id was
-empty, or the separator was missing entirely. Upstream returns bare `null` for
-all eight, discarding the reason.
+chef's `parseTxToken` returns a discriminated `{error: string}` carrying one of
+**three** message templates — the separator was missing, the project id was
+empty, or the counter was not a non-negative integer — which `compareTxToken`
+renders straight into the `mcpError` a client sees. Upstream returns bare `null`
+for all three, discarding the reason.
+
+(An earlier draft of this record said *eight*, counting the **inputs** in
+mcp-utils#25's table rather than the templates they map onto; several rows share
+a template. One of those rows, `"alpha:05"`, is not a lost diagnostic at all —
+chef *accepts* it as counter 5 while upstream rejects the leading zero, so it is
+a case where adopting upstream **fixes** chef. Correcting the count narrows this
+decline's margin without changing its direction: three real diagnostics still
+collapse to one, and the drift argument below is untouched by the arithmetic.)
 
 Re-deriving that classification locally would mean reimplementing the accept set
 this module exists to own — the first-colon split, the canonical-integer shape,
-`isValidProjectId` — in every consumer, and it fails silently the moment
-upstream tightens or loosens the set. So the gap was filed upstream rather than
-worked around locally, following ADR
+`isValidProjectId` — inside chef, and it fails silently the moment upstream
+tightens or loosens the set. So the gap was filed upstream rather than worked
+around locally, following ADR
 [0006](0006-upstream-ownership-boundary-and-adoption-posture.md)'s
 "request the right shape, wait" precedent.
 
-Note what this decline does *not* claim: the codec adoption is still the right
-end state. Only its timing is deferred, and only on the diagnostics axis.
+Scope the drift argument to **chef alone**, not to "both named consumers." The
+docstring names two, but `parseTxToken` currently has zero importing consumers:
+c3-domain-manager has already adopted the upstream codec and renders one generic
+`State changed` line, maintaining no local classifier. Chef alone is sufficient
+warrant; the two-consumer framing is not accurate.
+
+**This decline is narrower than "diagnostics only," and the difference matters.**
+Chef's parser is more permissive than upstream in **four** ways, not one — it
+splits at the last `:` rather than the first, accepts leading zeros, never
+applies `isValidProjectId`, and has no `Number.isSafeInteger` check. So even
+once mcp-utils#25 surfaces a reason, adopting the codec still changes observable
+rejection behaviour at chef's own MCP boundary; it is not a drop-in that
+restores today's semantics plus better messages.
+
+The safe-integer gap is a **live defect in chef**, not a stylistic divergence:
+`parseTxToken("alpha:9007199254740993")` returns counter `9007199254740992`,
+silently truncated. It cannot produce a false *accept* — truncation only occurs
+above 2^53 while real counters are small, so a truncated value can never equal a
+live counter — but it accepts input it should reject, and adopting upstream's
+codec fixes it for free. Tracked as [#221](https://github.com/GenvidTechnologies/construct3-chef/issues/221)
+so it is not blocked on mcp-utils#25 — chef can add the check unilaterally.
 
 ### DECLINE — a non-throwing local `format` wrapper, for now
 

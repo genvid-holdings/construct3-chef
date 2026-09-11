@@ -165,32 +165,33 @@ describe("ProjectRegistry / deriveProjectId", () => {
       expect(addId("")).to.throw(/project ids may not contain|may not be empty/);
     });
 
-    // R4 — the invariant the rows above exist to establish: anything that
-    // survives `add` must be something upstream can parse back. Stated over
-    // `deriveProjectId`'s own output so it tracks the production derivation
-    // rather than a hand-picked string list.
-    it("accepts no id that upstream's isValidProjectId would reject", () => {
-      const specs = [
-        "al pha=/tmp/x", // explicit branch, whitespace — the regression vector
-        "a\tb=/tmp/x", // explicit branch, tab
-        "alpha=/tmp/x", // explicit branch, clean
-        "/tmp/some project", // bare branch, spaces -> sanitize()
-        "/tmp/Weird Name!", // bare branch, punctuation -> sanitize()
-        "/tmp/plain",
+    // R4 — the invariant the rows above exist to establish: what survives `add`
+    // must be something upstream can parse back.
+    //
+    // Stated as an explicit expected-disposition table rather than a
+    // conditional. A `if (accepted) expect(isValidProjectId(id)).to.be.true`
+    // form is tautological against an implementation whose guard IS
+    // `isValidProjectId` — and worse, it contributes NO assertion at all for
+    // the whitespace rows, which take the reject branch and fall through. The
+    // rows this test names as the regression vector would have been silently
+    // unexercised.
+    it("derives, validates, and admits each launch spec exactly as upstream's rule dictates", () => {
+      const cases: Array<[spec: string, expectedId: string, admitted: boolean]> = [
+        ["al pha=/tmp/x", "al pha", false], // explicit branch, space — the regression vector
+        ["a\tb=/tmp/x", "a\tb", false], // explicit branch, tab — whitespace generally, not just ' '
+        ["alpha=/tmp/x", "alpha", true], // explicit branch, clean
+        ["/tmp/some project", "some-project", true], // bare branch -> sanitize() always yields a valid id
+        ["/tmp/Weird Name!", "weird-name", true],
+        ["/tmp/plain", "plain", true],
       ];
-      for (const spec of specs) {
+      for (const [spec, expectedId, admitted] of cases) {
         const id = deriveProjectId(spec);
-        let accepted = true;
-        try {
-          addId(id)();
-        } catch {
-          accepted = false;
-        }
-        if (accepted) {
-          expect(
-            isValidProjectId(id),
-            `add() accepted id ${JSON.stringify(id)} (from ${JSON.stringify(spec)}) but upstream rejects it`,
-          ).to.be.true;
+        expect(id, `deriveProjectId(${JSON.stringify(spec)})`).to.equal(expectedId);
+        expect(isValidProjectId(id), `isValidProjectId(${JSON.stringify(id)})`).to.equal(admitted);
+        if (admitted) {
+          expect(addId(id), `add(${JSON.stringify(id)}) should be admitted`).to.not.throw();
+        } else {
+          expect(addId(id), `add(${JSON.stringify(id)}) should be rejected`).to.throw(/Invalid project id/);
         }
       }
     });

@@ -304,6 +304,6 @@ See the [wiki index](../index.md) for the other sections.
   unparseable by the wire format's other named consumer. The guard now routes
   through upstream's `isValidProjectId`, a strict superset of the old check.
   Adopting upstream's txToken *codec* is deliberately deferred, gated on
-  mcp-utils#25, because it would collapse eight distinct parse diagnostics
+  mcp-utils#25, because it would collapse three distinct parse diagnostics
   into a bare `null`
   ([#217](https://github.com/GenvidTechnologies/construct3-chef/issues/217))

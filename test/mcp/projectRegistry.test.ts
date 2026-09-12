@@ -11,7 +11,7 @@ import { isValidProjectId } from "@genvidtech/mcp-utils";
 
 /**
  * ProjectRegistry is the launch-fixed, id-keyed set of ProjectContexts that
- * `regP` (a later task, #95) resolves a tool call's `project` selector
+ * `regP` (#95) resolves a tool call's `project` selector
  * against. These tests cover T-B2 (context independence), T-B3 (id
  * derivation/dedup/validation), and T-B4 (resolve() is a pure id lookup,
  * never a path/filesystem operation).

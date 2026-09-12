@@ -15,6 +15,22 @@ before. If a past entry itself needs correcting, add a new entry that says
 so; never edit or remove the old one in place. See `wiki/wiki-schema.md` for
 the full maintenance schema.
 
+## 2026-09-11
+
+* **Update**: `local-verification-practice.md` — added a false-**red** failure
+  mode to `## Running the gate`: concurrent `npm test` invocations corrupt the
+  fixture mid-read, because `pretest` re-materializes it via a recursive
+  `cpSync` over the live tree before every run. Surfaced on
+  [#217](https://github.com/GenvidTechnologies/construct3-chef/issues/217),
+  where three back-to-back invocations produced four failures in
+  fixture-dependent suites against a clean tree; a single run was green at 1730
+  passing. Recorded because the page previously covered only the false-*green*
+  direction, and a false red is the more expensive one — it sends you to "fix"
+  code that was already correct. The page `description` was widened to match
+  the new topic shape. Driven by session observation rather than a `raw/`
+  capture: the mechanism is verifiable in-tree (`package.json`'s `pretest`,
+  `scripts/prep-fixture.mjs`), so it carries no footnote.
+
 ## 2026-08-22
 
 * **Creation**: `decisions/0029-flat-docs-alias-generated-into-the-tarball.md`

@@ -64,9 +64,9 @@ describe("txToken", () => {
     }
 
     it("splits at the LAST colon, so an id containing ':' takes the trailing segment as the counter", () => {
-      // Ids may not contain ':' (enforced at ProjectRegistry construction, a
-      // sibling task) — this only documents parseTxToken's own behavior as a
-      // pure function that doesn't re-validate that invariant.
+      // Ids may not contain ':' (enforced at ProjectRegistry.add through
+      // upstream's isValidProjectId — #217) — this only documents parseTxToken's
+      // own behavior as a pure function that doesn't re-validate that invariant.
       const parsed = parseTxToken("alpha:5:6");
       expect(parsed).to.deep.equal({ id: "alpha:5", counter: 6 });
     });

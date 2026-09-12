@@ -1,4 +1,4 @@
-import { mcpError } from "@genvidtech/mcp-utils";
+import { isValidProjectId, mcpError } from "@genvidtech/mcp-utils";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ProjectContext } from "./projectContext.js";
 
@@ -23,15 +23,34 @@ export class ProjectRegistry {
   #defaultId: string | undefined;
 
   /**
-   * Register a context. Throws on a duplicate id, and throws if `ctx.id`
-   * contains `:` — ids feed the composite `<projectId>:<counter>` txId wire
-   * format, so a colon in an id would make that token ambiguous to parse.
+   * Register a context. Throws on a duplicate id, and throws if `ctx.id` is not
+   * a valid project id per `@genvidtech/mcp-utils`' {@link isValidProjectId} —
+   * non-empty, no `:`, no whitespace.
+   *
+   * That rule is deliberately upstream's rather than a local re-derivation
+   * (#217): ids feed the composite `<projectId>:<counter>` txId wire format,
+   * whose codec `mcp-utils` owns and whose other named consumer is
+   * `c3-domain-manager`. A locally re-rolled predicate would drift from the
+   * parser that actually has to read these tokens back, silently, at whatever
+   * patch release changed the accept set.
+   *
+   * This is a strict SUPERSET of the `:`-only check it replaced — note the two
+   * distinct enforcement points, which are easy to conflate: `EXPLICIT_ID_RE`
+   * in {@link splitSpec} constrains what the explicit `<id>=<path>` branch can
+   * PRODUCE (no `/`, `\`, `=`), whereas this method validates whatever it is
+   * HANDED. `add` never checked those characters, and upstream permits them
+   * too, so routing through `isValidProjectId` loosens nothing while closing
+   * two holes: a whitespace id (which upstream's `formatTxToken` would throw
+   * on) and an empty id.
+   *
    * The first context registered becomes the default (see {@link defaultId}).
    */
   add(ctx: ProjectContext): void {
-    if (ctx.id.includes(":")) {
+    if (!isValidProjectId(ctx.id)) {
       throw new Error(
-        `Invalid project id '${ctx.id}': project ids may not contain ':' (reserved for the '<projectId>:<counter>' txId wire format).`,
+        `Invalid project id '${ctx.id}': project ids may not contain ':' or whitespace, and may not be empty ` +
+          `(':' is reserved for the '<projectId>:<counter>' txId wire format; the full rule is ` +
+          `@genvidtech/mcp-utils' isValidProjectId, shared with every consumer of that format).`,
       );
     }
     if (this.#contexts.has(ctx.id)) {

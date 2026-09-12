@@ -38,8 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (unchanged) > cwd, plus an optional `--default-project <id>`. An explicit
   `<id>=` prefix always wins over derivation; a derived id is the sanitized
   basename of the root, deduped with a `-2`/`-3` suffix plus a stderr warning
-  on collision. Project ids may not contain `:` (reserved as the txId
-  separator). **An operator who supplies zero or one spec sees no behaviour
+  on collision. Project ids must satisfy `isValidProjectId` — non-empty, no `:`
+  (reserved as the txId separator), no whitespace; see the id-validation entry
+  under **Changed**, which widened this rule before either shipped. **An operator who supplies zero or one spec sees no behaviour
   change** — that path routes through the exact pre-#212 `resolveRootFolder`
   call, byte-for-byte, including its cwd-fallback stderr warning.
   ([#212](https://github.com/GenvidTechnologies/construct3-chef/pull/212),
@@ -100,6 +101,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#217](https://github.com/GenvidTechnologies/construct3-chef/issues/217)), and
   what `resolveRootFolders` unblocks
   ([#216](https://github.com/GenvidTechnologies/construct3-chef/issues/216)).
+
+- **Breaking: project ids are now validated against the shared wire-format
+  rule, not a local `:`-only check.** `ProjectRegistry.add` routes through
+  `@genvidtech/mcp-utils`' `isValidProjectId`, so an id must be non-empty and
+  contain no `:` **and no whitespace**. Previously chef accepted ids like
+  `al pha` (and the empty string) and minted composite txId tokens —
+  `al pha:0` — that upstream's `parseTxToken` rejects, leaving a chef-minted
+  token unparseable by the other named consumer of that wire format,
+  `c3-domain-manager`. Launching `--project-dir "my id=/path"` now fails at
+  startup with a message naming the constraint, instead of succeeding and
+  producing cross-repo-unparseable tokens.
+
+  > **Only the explicit `<id>=<path>` form is affected.** A bare path is
+  > sanitized to `[a-z0-9-]`, so `--project-dir "/games/My Game"` is unchanged
+  > and still yields `my-game`.
+
+  Adopting upstream's txToken **codec** (as opposed to its id rule) stays
+  deliberately deferred — it would collapse chef's three distinct parse
+  diagnostics into a bare `null`, and that gap is filed upstream as
+  [mcp-utils#25](https://github.com/GenvidTechnologies/mcp-utils/issues/25).
+  ([#217](https://github.com/GenvidTechnologies/construct3-chef/issues/217),
+  ADR [`0036`](wiki/decisions/0036-project-id-guard-uses-the-upstream-wire-format-rule.md))
 
 ### Fixed
 

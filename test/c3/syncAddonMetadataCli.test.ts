@@ -8,7 +8,7 @@ import { runCli } from "../helpers/runCli.js";
 import { seedManifestDrift } from "../helpers/seedManifestDrift.js";
 
 // Wiring-only coverage for the `sync-addon-metadata` CLI subcommand (issue #145,
-// task F1). The library (src/c3/addonMetadataSync.ts) already has exhaustive unit
+// #145). The library (src/c3/addonMetadataSync.ts) already has exhaustive unit
 // coverage in test/c3/addonMetadataSync.test.ts — this file exists only for the
 // handful of assertions that genuinely need a real process boundary: yargs'
 // `demandOption` rejection (T1) and the exit-code decision table (T28), plus a

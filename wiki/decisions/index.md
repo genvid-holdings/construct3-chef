@@ -298,3 +298,12 @@ See the [wiki index](../index.md) for the other sections.
   sets the ceiling for config that can. `DEFAULT_CHEF_CONFIG`'s use by the
   test seams is deliberate and was left alone
   ([#211](https://github.com/GenvidTechnologies/construct3-chef/issues/211))
+* [0036. The project-id guard is upstream's wire-format rule, not a local one](0036-project-id-guard-uses-the-upstream-wire-format-rule.md) -
+  `ProjectRegistry.add` guarded only `:`, so chef minted project ids that
+  `@genvidtech/mcp-utils`' `parseTxToken` rejects — leaving a chef-minted txId
+  unparseable by the wire format's other named consumer. The guard now routes
+  through upstream's `isValidProjectId`, a strict superset of the old check.
+  Adopting upstream's txToken *codec* is deliberately deferred, gated on
+  mcp-utils#25, because it would collapse three distinct parse diagnostics
+  into a bare `null`
+  ([#217](https://github.com/GenvidTechnologies/construct3-chef/issues/217))

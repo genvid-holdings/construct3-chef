@@ -3,8 +3,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ProjectContext } from "./projectContext.js";
 
 /**
- * Composite `<projectId>:<counter>` txId codec (#95, ADR `wiki/decisions/0034`,
- * once authored — see `plan.md` task P3). Under single-project MCP the txId
+ * Composite `<projectId>:<counter>` txId codec (#95, ADR `wiki/decisions/0034`).
+ * Under single-project MCP the txId
  * was a bare integer; under multi-project two projects sitting at the same
  * counter value is the common case, not a coincidence (both start at 0 and
  * increment per mutation), so a bare integer from project alpha would be
@@ -23,8 +23,10 @@ import type { ProjectContext } from "./projectContext.js";
  * means one counter, so no intermediate state could misattribute a token.
  */
 
-/** Project ids may not contain `:` (enforced at `ProjectRegistry` construction,
- * a sibling task) — that is what makes splitting at the last `:` unambiguous. */
+/** Project ids may not contain `:` or whitespace, and may not be empty —
+ * enforced at `ProjectRegistry.add` through `@genvidtech/mcp-utils`'
+ * `isValidProjectId`, the same rule this wire format's other consumers apply
+ * (#217). The `:` half is what makes splitting at the last `:` unambiguous. */
 export function formatTxToken(id: string, counter: number): string {
   return `${id}:${counter}`;
 }
@@ -80,7 +82,7 @@ export function parseTxToken(s: string): { id: string; counter: number } | { err
  *   and the expected shape.
  * - `token`'s id !== `ctx.id` -> error naming BOTH ids (the id this token
  *   was minted for, and the project this call actually targets) — this is
- *   what T-X4 (a later task) grades: a token minted for one project must be
+ *   what T-X4 grades: a token minted for one project must be
  *   rejected against another, even at an identical counter value.
  * - id matches but the counter has moved -> the existing "State changed"
  *   wording server.ts already uses today, updated to carry composite tokens

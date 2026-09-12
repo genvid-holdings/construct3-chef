@@ -60,8 +60,13 @@ isolated nicety. Blocked-on-upstream items that can't start yet are not P0/P1.
   - `area:live-editor` — C3 live-editor integration (Playwright/addon bridge).
   - `area:testing` — golden test, fixtures, test infrastructure.
   - `area:docs` — documentation.
-- `to refine` — the **needs-info** signal: issue needs research/brainstorming before
-  it can be acted on (existing repo label). Cleared once scoped.
+- `to refine` — the **needs-refinement** signal: the issue's problem and goal are
+  clear, but a decision (mechanism, option, or policy) is still open (existing
+  repo label). **It is not a blocker and does not defer the issue** — it marks
+  that the refinement belongs in the analysis/design phase, which is where that
+  decision gets made. A `to refine` issue is fully eligible to be picked up and
+  planned; ranking skills must not de-prioritize it on the strength of this
+  label alone. Cleared once the open decision is settled.
 - `duplicate` — non-canonical member of a duplicate cluster.
 - `triaged` — set **last**, by the skill, when triage of the issue is complete.
 
@@ -71,8 +76,9 @@ The triager sets type, `priority/*`, and `area:*`.
 
 Every triaged issue must have: a clear problem statement / motivation (the *why*),
 a proposed direction or acceptance criteria (even if rough), and at least one
-`area:*` label. An issue that is still an open question (no actionable direction)
-keeps/gets `to refine` instead — comment exactly what needs deciding.
+`area:*` label. An issue whose direction is still an open
+question keeps/gets `to refine` **in addition** — comment exactly what needs
+deciding. This does not hold the issue back; see the label definition above.
 
 ## What `triaged` does and does not assert
 

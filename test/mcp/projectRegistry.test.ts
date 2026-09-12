@@ -7,10 +7,11 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createProjectContext, type ProjectContext } from "../../src/mcp/projectContext.js";
 import { createSourceWatcher } from "../../src/mcp/sourceWatcher.js";
 import { ProjectRegistry, deriveProjectId } from "../../src/mcp/projectRegistry.js";
+import { isValidProjectId } from "@genvidtech/mcp-utils";
 
 /**
  * ProjectRegistry is the launch-fixed, id-keyed set of ProjectContexts that
- * `regP` (a later task, #95) resolves a tool call's `project` selector
+ * `regP` (#95) resolves a tool call's `project` selector
  * against. These tests cover T-B2 (context independence), T-B3 (id
  * derivation/dedup/validation), and T-B4 (resolve() is a pure id lookup,
  * never a path/filesystem operation).
@@ -124,6 +125,83 @@ describe("ProjectRegistry / deriveProjectId", () => {
       const registry = new ProjectRegistry();
       const fake = { id: "bad:id", root: "/fake", extractedDir: "/fake/extracted" } as unknown as ProjectContext;
       expect(() => registry.add(fake)).to.throw(/project ids may not contain ':'/);
+    });
+  });
+
+  // ── #217: the id guard is the shared wire-format rule, not a local one ────
+  //
+  // `ProjectRegistry.add` historically guarded only ':'. Measured against the
+  // pre-change tree, it ACCEPTED `"al pha"`, `"a\tb"`, and `""` — so chef could
+  // mint a project id that `@genvidtech/mcp-utils`' `parseTxToken` rejects,
+  // making a chef-minted token unparseable by the other named consumer of this
+  // wire format (`c3-domain-manager`). That is an interop defect independent of
+  // whether chef ever adopts upstream's codec (deferred to mcp-utils#25).
+  //
+  // Note the two DISTINCT enforcement points, easily conflated: `EXPLICIT_ID_RE`
+  // in `splitSpec` constrains what the explicit `<id>=<path>` branch can PRODUCE
+  // (no '/', '\', '='), while `add` validates whatever it is HANDED. `add` never
+  // checked those characters — `add("al/pha")` is accepted here and upstream
+  // both — so routing `add` through `isValidProjectId` loosens nothing; it is a
+  // strict superset of the old ':'-only check.
+  describe("the id guard matches upstream's wire-format rule (#217)", () => {
+    function addId(id: string): () => void {
+      const registry = new ProjectRegistry();
+      const fake = { id, root: "/fake", extractedDir: "/fake/extracted" } as unknown as ProjectContext;
+      return () => registry.add(fake);
+    }
+
+    // R1 — baseline: ACCEPTED before this change.
+    it("rejects an id containing a space", () => {
+      expect(addId("al pha")).to.throw(/project ids may not contain/);
+    });
+
+    // R1 — the vector is whitespace generally, not the space character.
+    it("rejects an id containing a tab", () => {
+      expect(addId("a\tb")).to.throw(/project ids may not contain/);
+    });
+
+    // R2 — baseline: ACCEPTED before this change. A hole nobody had noticed.
+    it("rejects an empty id", () => {
+      expect(addId("")).to.throw(/project ids may not contain|may not be empty/);
+    });
+
+    // R4 — the invariant the rows above exist to establish: what survives `add`
+    // must be something upstream can parse back.
+    //
+    // Stated as an explicit expected-disposition table rather than a
+    // conditional. A `if (accepted) expect(isValidProjectId(id)).to.be.true`
+    // form is tautological against an implementation whose guard IS
+    // `isValidProjectId` — and worse, it contributes NO assertion at all for
+    // the whitespace rows, which take the reject branch and fall through. The
+    // rows this test names as the regression vector would have been silently
+    // unexercised.
+    it("derives, validates, and admits each launch spec exactly as upstream's rule dictates", () => {
+      const cases: Array<[spec: string, expectedId: string, admitted: boolean]> = [
+        ["al pha=/tmp/x", "al pha", false], // explicit branch, space — the regression vector
+        ["a\tb=/tmp/x", "a\tb", false], // explicit branch, tab — whitespace generally, not just ' '
+        ["alpha=/tmp/x", "alpha", true], // explicit branch, clean
+        ["/tmp/some project", "some-project", true], // bare branch -> sanitize() always yields a valid id
+        ["/tmp/Weird Name!", "weird-name", true],
+        ["/tmp/plain", "plain", true],
+      ];
+      for (const [spec, expectedId, admitted] of cases) {
+        const id = deriveProjectId(spec);
+        expect(id, `deriveProjectId(${JSON.stringify(spec)})`).to.equal(expectedId);
+        expect(isValidProjectId(id), `isValidProjectId(${JSON.stringify(id)})`).to.equal(admitted);
+        if (admitted) {
+          expect(addId(id), `add(${JSON.stringify(id)}) should be admitted`).to.not.throw();
+        } else {
+          expect(addId(id), `add(${JSON.stringify(id)}) should be rejected`).to.throw(/Invalid project id/);
+        }
+      }
+    });
+
+    // R5 — the sanitize() branch must be untouched: a bare path containing
+    // spaces is NOT the defect, and must keep deriving a usable id.
+    it("leaves the bare-path branch working — spaces there are sanitized, not rejected", () => {
+      expect(deriveProjectId("/tmp/some project")).to.equal("some-project");
+      expect(deriveProjectId("/tmp/Weird Name!")).to.equal("weird-name");
+      expect(addId("some-project")).to.not.throw();
     });
   });
 

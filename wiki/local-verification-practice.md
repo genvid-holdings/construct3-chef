@@ -1,7 +1,7 @@
 ---
 type: practice-note
 title: Local verification practice
-description: How a change is verified locally in construct3-chef — bootstrap, the validate gate and its timing, fixture safety, and the failure modes where a green result proves nothing
+description: How a change is verified locally in construct3-chef — bootstrap, the validate gate and its timing, fixture safety, and the failure modes where a green result proves nothing — or a red one proves only that two suite runs collided
 tags: [verification, testing, fixtures, workflow]
 status: stable
 stale_after: 2027-02-16
@@ -56,6 +56,32 @@ gate an explicit timeout of at least 300000 ms, and prefer running `lint` and
 `test` as separate calls rather than chaining them into one command that's
 more likely to blow a shorter budget. `npm run typecheck` is comparatively
 fast and doesn't need the same allowance.
+
+
+**Run one suite at a time — concurrent invocations manufacture false failures.**
+`package.json` wires `pretest: npm run fixture:prep` (and `pretest:file`
+likewise), so **every** `npm test` re-materializes the fixture before mocha
+starts, and `scripts/prep-fixture.mjs` does a recursive
+`cpSync(source, dest)` straight over the live tree. A second `npm test`
+launched while a first is still running therefore rewrites the very files the
+first is reading. On issue
+[#217](https://github.com/GenvidTechnologies/construct3-chef/issues/217) three
+back-to-back invocations — a tail, a grep, and a filtered re-run of the same
+command — produced four failures (`K1 fileSuffixes`, the `R6`/`R8` drift rows,
+and a 5000 ms timeout in `serverHandlers.test.ts`) against a tree that was
+clean; a single run immediately afterwards was green at 1730 passing. Every
+failure sat in a fixture-dependent suite, which is the diagnostic signature.
+
+This is the mirror of *Where a green result proves nothing* below, and the
+more expensive direction: a false **red** sends you to "fix" code that was
+already correct. So when fixture-dependent suites fail unexpectedly, do not
+start debugging them — confirm no other suite run is in flight, run
+`npm run fixture:verify` (its four assertions are the real oracle; `git status`
+cannot see fixture drift, because the directory is gitignored except the
+tracked overlay), and re-run once. Treat a failure that does not reproduce on
+a clean single run as contention, not signal. Practically: capture output to a
+file and read it afterwards, rather than re-running the suite to re-filter its
+output.
 
 ## Smoke-testing without corrupting the fixture
 

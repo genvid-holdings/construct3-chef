@@ -14,7 +14,7 @@ import { GENERATORS } from "../../src/c3/generators.js";
  * only "works" today because `extractScripts` happens to run before it and
  * creates `outDir` as a side effect.
  *
- * This test is committed RED, before that fix (a later task in the same
+ * This test is committed RED, before that fix (landing later in the same
  * plan), so the red state is a structural artifact in git history rather
  * than a claim. At this commit the shape is exactly 1 failing (`templates`)
  * / 5 passing — the five passing siblings are the POSITIVE CONTROL: they

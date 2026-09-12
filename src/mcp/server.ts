@@ -103,7 +103,7 @@ let defaultCtx: ProjectContext = new ProjectContext(DEFAULT_PROJECT_ID, process.
 // __resetTestState test seams) so `list-projects` never reports a registry
 // that disagrees with the context every other tool actually reads. Multi-root
 // launches populate more than the one default entry; only the default is
-// reachable by any tool but `list-projects` until a later task threads a
+// reachable by any tool but `list-projects` until the `regP` selector threads a
 // per-call `project` selector (see ADR wiki/decisions/0034).
 let REGISTRY: ProjectRegistry = new ProjectRegistry();
 REGISTRY.add(defaultCtx);

@@ -41,7 +41,8 @@ describe("txToken", () => {
       expect(parsed).to.deep.equal({ id: "alpha", counter: 0 });
     });
 
-    // Malformed-input table (task P3 point 2).
+    // Malformed-input table — mirrors the table in src/mcp/txToken.ts's
+    // parseTxToken docstring.
     const malformed: Array<[label: string, input: string]> = [
       ["no colon at all", "alpha"],
       ["empty counter segment", "alpha:"],
@@ -63,9 +64,9 @@ describe("txToken", () => {
     }
 
     it("splits at the LAST colon, so an id containing ':' takes the trailing segment as the counter", () => {
-      // Ids may not contain ':' (enforced at ProjectRegistry construction, a
-      // sibling task) — this only documents parseTxToken's own behavior as a
-      // pure function that doesn't re-validate that invariant.
+      // Ids may not contain ':' (enforced at ProjectRegistry.add through
+      // upstream's isValidProjectId — #217) — this only documents parseTxToken's
+      // own behavior as a pure function that doesn't re-validate that invariant.
       const parsed = parseTxToken("alpha:5:6");
       expect(parsed).to.deep.equal({ id: "alpha:5", counter: 6 });
     });
